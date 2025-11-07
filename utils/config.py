@@ -76,4 +76,28 @@ def get_parser():
     parser.add_argument('--l0_method', type=str, default='hard-concrete',
                    choices=['hard-concrete', 'arm'])
     parser.add_argument('--baseline_ema', type=float, default=0.9)
+      # ============================================
+    # 🆕 TARGET DENSITY CONTROL PARAMETERS
+    # ============================================
+    parser.add_argument('--target-density', type=float, default=0.30,
+                        help='Target edge retention rate (0.0-1.0) for density control (default: 0.30)')
+    
+    parser.add_argument('--lambda-density', type=float, default=0.03,
+                        help='Density loss weight (λ_ρ) (default: 0.03)')
+    
+    parser.add_argument('--enable-adaptive-lambda', action='store_true', default=True,
+                        help='Enable adaptive lambda mechanism (default: True)')
+    
+    parser.add_argument('--enable-density-loss', action='store_true', default=True,
+                        help='Enable density loss term (default: True)')
+    
+    parser.add_argument('--alpha-min', type=float, default=0.2,
+                        help='Minimum adaptive scaling factor (default: 0.2)')
+    
+    parser.add_argument('--alpha-max', type=float, default=2.0,
+                        help='Maximum adaptive scaling factor (default: 2.0)')
+    
+    parser.add_argument('--ramp-epochs', type=int, default=20,
+                        help='Number of epochs for lambda ramp after warmup (default: 20)')
+    
     return parser
