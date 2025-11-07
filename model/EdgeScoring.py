@@ -131,7 +131,9 @@ class EdgeScoringNetwork(nn.Module):
         # Compute logAlpha (edge logits) for all pairs
         logAlpha_flat = self.edge_mlp(edge_features_flat).squeeze(-1)  # [B*N*N]
         logAlpha = logAlpha_flat.reshape(batch_size, num_nodes, num_nodes)  # [B, N, N]
-        
+
+        #  ADD THIS: Logit clamping for stabilization
+        logAlpha = torch.clamp(logAlpha, min=-5.0, max=5.0)
         # Store for ARM gradient computation
         self.last_logAlpha = logAlpha
         
