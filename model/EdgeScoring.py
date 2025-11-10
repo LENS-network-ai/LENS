@@ -196,9 +196,24 @@ class EdgeScoringNetwork(nn.Module):
                     return edge_weights, edge_weights_anti, logAlpha
                 else:
                     return edge_weights, logAlpha
+            elif self.l0_method == 'ste':
+             # 🆕 NEW: STE method
+             from model.L0Utils_STE import ste_sample_gates
             
+             if training:
+                # Sample binary gates with STE
+                edge_weights, probs = ste_sample_gates(
+                    logAlpha, l0_params, temperature=temperature
+                )
+               
+                
+                return edge_weights, logAlpha
             else:
-                raise ValueError(f"Unknown l0_method: {self.l0_method}")
+                # Eval: Use probabilities (or hard threshold)
+                from model.L0Utils import l0_test
+                edge_weights = l0_test(logits, l0_params=l0_params)
+                return edge_weights, logits
+         
         
         else:
             # No L0 regularization - use Gumbel-Softmax (legacy behavior)

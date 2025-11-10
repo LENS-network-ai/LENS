@@ -1,6 +1,6 @@
 # model/ImprovedEdgeGNN.py (or LENS.py)
 """
-LENS Model with support for Hard-Concrete, ARM, and STE L0 regularization
+LENS Model with support for both Hard-Concrete and ARM L0 regularization
 WITH TARGET DENSITY CONTROL
 """
 
@@ -21,10 +21,9 @@ class ImprovedEdgeGNN(nn.Module):
     """
     LENS: Learning Edge-Node Sparsity for Whole Slide Image Analysis
     
-    Supports three L0 regularization methods:
+    Supports two L0 regularization methods:
     - hard-concrete: Continuous relaxation with Gumbel-Softmax (default)
     - arm: Augment-REINFORCE-Merge for direct binary sampling
-    - ste: Straight-Through Estimator with binary gates
     
     WITH TARGET DENSITY CONTROL:
     - Adaptive lambda mechanism
@@ -62,7 +61,7 @@ class ImprovedEdgeGNN(nn.Module):
             lambda_density: Density loss weight (λ_ρ)
             target_density: Target edge retention rate (0.0-1.0)
             reg_mode: 'l0' or other regularization mode
-            l0_method: 'hard-concrete', 'arm', or 'ste'
+            l0_method: 'hard-concrete' or 'arm'
             edge_dim: Hidden dimension for edge scoring network
             warmup_epochs: Number of warmup epochs
             ramp_epochs: Number of epochs for lambda ramp after warmup
@@ -106,18 +105,20 @@ class ImprovedEdgeGNN(nn.Module):
                 )
                 print(f"[LENS] Using ARM L0 regularization")
                 print(f"  → Parameters: gamma={l0_gamma}, zeta={l0_zeta}, baseline_ema={baseline_ema}")
-                
             elif l0_method == 'ste':
-                # 🆕 NEW: STE parameters (simplified - no stretching needed)
-                from model.L0Utils_STE import STERegularizerParams
-                self.l0_params = STERegularizerParams()
-                print(f"[LENS] Using STE (Straight-Through Estimator)")
-                print(f"  → Binary gates during training with straight-through gradients!")
-                
+             # 🆕 NEW: STE parameters
+             from model.L0Utils_STE import STERegularizerParams
+             self.l0_params = STERegularizerParams(
+                gamma=l0_gamma,
+                zeta=l0_zeta
+             )
+             print(f"[LENS] Using STE (Straight-Through Estimator)")
+             print(f"  → Parameters: gamma={l0_gamma}, zeta={l0_zeta}")
+             print(f"  → Binary gates during training!")     
             else:
-                raise ValueError(f"Unknown l0_method: {l0_method}. Use 'hard-concrete', 'arm', or 'ste'")
+                raise ValueError(f"Unknown l0_method: {l0_method}. Use 'hard-concrete' or 'arm'")
         
-        # Edge scoring network (supports all methods)
+        # Edge scoring network (supports both methods)
         self.edge_scorer = EdgeScoringNetwork(
             feature_dim=feature_dim,
             edge_dim=edge_dim,
@@ -273,27 +274,21 @@ class ImprovedEdgeGNN(nn.Module):
             print("[LENS] Warning: Attempting to update L0 parameters but not using L0 regularization")
     
     def aggregate(self, node_feat, adj_matrix, edge_weights):
-      """Neighborhood aggregation with learned edge weights + self-loops"""
-      # ============================================
-      # 🆕 ADD SELF-LOOPS
-      # ============================================
-      eye = torch.eye(adj_matrix.size(1), device=adj_matrix.device).unsqueeze(0)  # [1, N, N]
-      adj_matrix = adj_matrix + eye
-      adj_matrix = torch.clamp(adj_matrix, max=1.0)  # ensure no values > 1
-
-      # Apply edge weights to adjacency matrix
-      weighted_adj = adj_matrix * edge_weights
-
-      # Row-normalize weighted adjacency matrix
-      row_sum = torch.sum(weighted_adj, dim=2, keepdim=True) + 1e-8
-      norm_adj = weighted_adj / row_sum
-
-      # Aggregate neighbor features
-      return torch.bmm(norm_adj, node_feat)    
+        """Neighborhood aggregation with learned edge weights"""
+        # Apply edge weights to adjacency matrix
+        weighted_adj = adj_matrix * edge_weights
+        
+        # Row-normalize weighted adjacency matrix
+        row_sum = torch.sum(weighted_adj, dim=2, keepdim=True) + 1e-8
+        norm_adj = weighted_adj / row_sum
+        
+        # Aggregate neighbor features
+        return torch.bmm(norm_adj, node_feat)
+    
     def forward(self, node_feat, labels, adjs, masks=None, 
                 return_edge_weights_anti=False):
         """
-        Forward pass with support for Hard-Concrete, ARM, and STE
+        Forward pass with support for both Hard-Concrete and ARM
         WITH DENSITY CONTROL
         
         Args:
@@ -336,7 +331,7 @@ class ImprovedEdgeGNN(nn.Module):
             edge_weights, edge_weights_anti, logAlpha = edge_scorer_outputs
             self.last_edge_weights_anti = edge_weights_anti
         else:
-            # Hard-Concrete, STE, or eval mode returns (edge_weights, logAlpha)
+            # Hard-Concrete or eval mode returns (edge_weights, logAlpha)
             if isinstance(edge_scorer_outputs, tuple) and len(edge_scorer_outputs) == 2:
                 edge_weights, logAlpha = edge_scorer_outputs
             else:
@@ -363,31 +358,13 @@ class ImprovedEdgeGNN(nn.Module):
         # ============================================
         # 🆕 COMPUTE REGULARIZATION WITH DENSITY CONTROL
         # ============================================
-        if self.use_l0 and logAlpha is not None:
+        if self.use_l0:
             # Compute current density for adaptive lambda
             from model.EGL_L0_Reg import compute_density
             current_density = compute_density(edge_weights, adjs)
             
-            # 🔧 COMPUTE L0 PENALTY BASED ON METHOD
-            if self.l0_method == 'hard-concrete':
-                from model.L0Utils import get_loss2
-                l0_penalty = get_loss2(logAlpha, params=self.l0_params).sum()
-                
-            elif self.l0_method == 'arm':
-                from model.L0Utils_ARM import get_expected_l0_arm
-                l0_penalty = get_expected_l0_arm(logAlpha, self.l0_params)
-                
-            elif self.l0_method == 'ste':
-                # 🆕 STE: Simple L0 penalty (sum of probabilities)
-                from model.L0Utils_STE import get_expected_l0_ste
-                l0_penalty = get_expected_l0_ste(logAlpha, l0_params=self.l0_params)
-            
-            else:
-                raise ValueError(f"Unknown l0_method: {self.l0_method}")
-            
-            # Compute full regularization with density control
-            reg_loss, reg_stats = self.regularizer.compute_regularization_with_l0(
-                l0_penalty=l0_penalty,
+            # Compute regularization with density control
+            reg_loss, reg_stats = self.regularizer.compute_regularization(
                 edge_weights=edge_weights,
                 adj_matrix=adjs,
                 return_stats=True

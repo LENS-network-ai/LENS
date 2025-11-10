@@ -22,6 +22,7 @@ from model.L0Utils_ARM import get_expected_l0_arm, ARML0RegularizerParams
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
+# model/EGL_L0_Reg.py - ADD THIS METHOD
 
 def compute_density(edge_weights, adj_matrix):
     """
@@ -189,7 +190,58 @@ class EGLassoRegularization:
     # ========================================================================
     # LOGIT STORAGE FOR L0 REGULARIZATION
     # ========================================================================
+    def compute_regularization_with_l0(self, l0_penalty, edge_weights, adj_matrix, 
+                                    return_stats=False):
+     """
+     Compute regularization when L0 penalty is already computed
     
+     This is used for Hard-Concrete, ARM, and STE where L0 penalty
+     is computed differently for each method
+    
+     Args:
+        l0_penalty: Pre-computed L0 penalty (scalar tensor)
+        edge_weights: Edge weights [B, N, N]
+        adj_matrix: Original adjacency [B, N, N]
+        return_stats: If True, return detailed statistics
+    
+     Returns:
+        reg_loss: Total regularization loss
+        stats: Dictionary with loss components (if return_stats=True)
+     """
+     # Compute current density
+     current_density = compute_density(edge_weights, adj_matrix)
+    
+     # Compute effective lambda (with adaptive mechanism if enabled)
+     if self.enable_adaptive_lambda:
+        lambda_eff, alpha = self.compute_adaptive_lambda(current_density)
+     else:
+        lambda_eff = self.current_lambda
+        alpha = 1.0
+    
+     # L0 regularization loss
+     l0_loss = lambda_eff * l0_penalty
+    
+     # Density loss (if enabled)
+     if self.enable_density_loss and self.current_epoch >= self.warmup_epochs:
+        density_deviation = torch.abs(current_density - self.target_density)
+        density_loss = self.current_lambda_density * density_deviation
+     else:
+        density_loss = torch.tensor(0.0, device=edge_weights.device)
+    
+     # Total regularization
+     reg_loss = l0_loss + density_loss
+    
+     if return_stats:
+        stats = {
+            'l0_loss': l0_loss.item() if isinstance(l0_loss, torch.Tensor) else l0_loss,
+            'density_loss': density_loss.item() if isinstance(density_loss, torch.Tensor) else density_loss,
+            'lambda_eff': lambda_eff if isinstance(lambda_eff, float) else lambda_eff.item(),
+            'alpha': alpha,
+            'current_density': current_density.item() if isinstance(current_density, torch.Tensor) else current_density,
+        }
+        return reg_loss, stats
+    
+     return reg_loss
     def clear_logits(self):
         """Clear stored logits for L0 regularization"""
         self.logits_storage = {}

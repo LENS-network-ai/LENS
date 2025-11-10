@@ -1,7 +1,7 @@
 # training/training_loop.py
 """
 Training loop with WandB logging and TARGET DENSITY CONTROL
-Supports Hard-Concrete + ARM with adaptive lambda and density loss
+Supports Hard-Concrete, ARM, and STE with adaptive lambda and density loss
 """
 
 import os
@@ -30,7 +30,7 @@ def train_and_evaluate(model, train_loader, val_loader, optimizer, scheduler, de
         output_dir: Directory for outputs
         warmup_epochs: Number of warmup epochs
         wandb_config: WandB configuration dict (if None, don't use WandB)
-        l0_method: 'hard-concrete' or 'arm'
+        l0_method: 'hard-concrete', 'arm', or 'ste'
     """
     # Initialize WandB if config provided
     use_wandb = wandb_config is not None
@@ -346,8 +346,28 @@ def train_epoch(epoch, model, train_loader, optimizer, scheduler, trainer,
                 cls_loss_sum += cls_loss_b.item() if isinstance(cls_loss_b, torch.Tensor) else 0
                 trainer.update_metrics(pred, labels)
             
+            elif l0_method == 'ste':
+                # 🆕 STE training (same as Hard-Concrete - no antithetic samples needed)
+                pred, labels, loss, weighted_adj = trainer.train(
+                    sample, model, n_features=n_features
+                )
+                
+                # Extract loss components
+                if hasattr(model, 'stats_tracker') and hasattr(model.stats_tracker, 'cls_loss_history'):
+                    if len(model.stats_tracker.cls_loss_history) > 0:
+                        cls_loss = model.stats_tracker.cls_loss_history[-1]
+                        reg_loss = model.stats_tracker.reg_loss_history[-1]
+                        cls_loss_sum += cls_loss
+                        reg_loss_sum += reg_loss
+                        
+                        # Extract density loss if available
+                        if hasattr(model.stats_tracker, 'density_loss_history'):
+                            if len(model.stats_tracker.density_loss_history) > 0:
+                                density_loss = model.stats_tracker.density_loss_history[-1]
+                                density_loss_sum += density_loss
+            
             else:
-                raise ValueError(f"Unknown l0_method: {l0_method}")
+                raise ValueError(f"Unknown l0_method: {l0_method}. Use 'hard-concrete', 'arm', or 'ste'")
             
             # ============================================
             # 🆕 COMPUTE CURRENT DENSITY & ADAPTIVE METRICS
