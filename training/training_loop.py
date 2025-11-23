@@ -348,10 +348,10 @@ def train_epoch(epoch, model, train_loader, optimizer, scheduler, trainer,
     """
     Run one epoch of training
     
-    ✅ FIXED: Dual variable updates per-batch (as in paper Eq. 5)
-    - Each batch computes its own constraint violation
-    - Dual variable is updated IMMEDIATELY after each batch
-    - No averaging of violations across batches
+    ✅ STABILIZED: Dual variable updates per-epoch with moving average
+    - Collect violations from each batch
+    - Update dual variable ONCE per epoch with averaged violation
+    - Prevents explosion and oscillations
     
     Returns:
         dict: Training metrics including density and constraint info
@@ -375,18 +375,19 @@ def train_epoch(epoch, model, train_loader, optimizer, scheduler, trainer,
     reg_loss_sum = 0.0
     trainer.reset_metrics()
     
-    # Tracking lists (for logging/monitoring only)
+    # Tracking lists
     batch_densities = []
-    constraint_violations = []  # For logging only - NOT used for updates
-    dual_lambda_values = []     # Track dual lambda evolution
-    alpha_values = []           # For penalty mode adaptive scaling
-    lambda_eff_values = []      # For penalty mode effective lambda
+    constraint_violations = []  # Collect for epoch-end update
+    dual_lambda_values = []
+    alpha_values = []
+    lambda_eff_values = []
     
-    # Batch loop
+    # ========================================================================
+    # BATCH LOOP - NO DUAL UPDATES HERE
+    # ========================================================================
     for batch_idx, sample in enumerate(train_loader):
         optimizer.zero_grad()
         
-        # Control verbose printing
         if hasattr(model, 'set_print_stats'):
             model.set_print_stats(batch_idx % 50 == 0)
         
@@ -398,30 +399,31 @@ def train_epoch(epoch, model, train_loader, optimizer, scheduler, trainer,
                 sample, model, n_features=n_features
             )
             
-            # ================================================================
-            # COLLECT BATCH STATISTICS (from model's stats tracker)
-            # ================================================================
+            # Collect batch statistics
             if hasattr(model, 'stats_tracker'):
-                # Classification and regularization losses
                 if hasattr(model.stats_tracker, 'cls_loss_history') and len(model.stats_tracker.cls_loss_history) > 0:
                     cls_loss_sum += model.stats_tracker.cls_loss_history[-1]
                     reg_loss_sum += model.stats_tracker.reg_loss_history[-1]
                 
-                # Current density
                 if hasattr(model.stats_tracker, 'current_density_history') and len(model.stats_tracker.current_density_history) > 0:
                     batch_densities.append(model.stats_tracker.current_density_history[-1])
                 
-                # Penalty mode specific metrics
+                # Collect constraint violations (for constrained mode)
+                if use_constrained:
+                    if hasattr(model, 'last_constraint_violation'):
+                        if model.last_constraint_violation is not None:
+                            constraint_violations.append(model.last_constraint_violation)
+                
+                # Penalty mode metrics
                 if not use_constrained:
                     if hasattr(model.stats_tracker, 'lambda_eff_history'):
                         if len(model.stats_tracker.lambda_eff_history) > 0:
                             lambda_eff_values.append(model.stats_tracker.lambda_eff_history[-1])
-                            # Compute adaptive alpha
                             if model.regularizer.current_lambda > 0:
                                 alpha = model.stats_tracker.lambda_eff_history[-1] / model.regularizer.current_lambda
                                 alpha_values.append(alpha)
             
-            # Check for NaN/Inf (skip batch if detected)
+            # Check for NaN/Inf
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"   ⚠️  Skipping batch {batch_idx}: NaN/Inf loss detected")
                 continue
@@ -430,31 +432,6 @@ def train_epoch(epoch, model, train_loader, optimizer, scheduler, trainer,
             # BACKWARD PASS
             # ================================================================
             loss.backward()
-            
-            # ================================================================
-            # ✅ CONSTRAINED MODE: UPDATE DUAL VARIABLE PER-BATCH
-            # ================================================================
-            if use_constrained:
-                # Check if model has computed constraint violation for this batch
-                if hasattr(model, 'last_constraint_violation'):
-                    if model.last_constraint_violation is not None:
-                        # Get CURRENT batch's violation (not averaged!)
-                        current_violation = model.last_constraint_violation
-                        
-                        # Paper Equation 5: λ^{t+1} = λ^t + η_dual * (g_const - ε)
-                        # Paper Equation 6: With dual restart heuristic
-                        model.regularizer.update_dual_variable(
-                            current_violation  # ✅ Use current batch violation directly!
-                        )
-                        
-                        # Store for logging/monitoring (not used for updates)
-                        constraint_violations.append(current_violation)
-                        dual_lambda_values.append(model.regularizer.dual_lambda)
-                        
-                        # Verbose logging for first few batches
-                        if batch_idx < 5 and epoch < 3:
-                            print(f"   [Batch {batch_idx}] violation={current_violation:.6f}, "
-                                  f"λ_dual={model.regularizer.dual_lambda:.6f}")
             
             # ================================================================
             # GRADIENT CLIPPING
@@ -479,6 +456,110 @@ def train_epoch(epoch, model, train_loader, optimizer, scheduler, trainer,
                 raise e
     
     # ========================================================================
+    # ✅ EPOCH-END DUAL VARIABLE UPDATE (STABILIZED)
+    # ========================================================================
+    if use_constrained and len(constraint_violations) > 0:
+        # Compute epoch-averaged constraint violation
+        epoch_avg_violation = np.mean(constraint_violations)
+        epoch_avg_density = np.mean(batch_densities) if batch_densities else 0.0
+        
+        # ====================================================================
+        # SAFEGUARD 1: Clip violation to prevent explosion
+        # ====================================================================
+        max_violation = 0.2  # Max 20% violation to prevent huge jumps
+        epoch_avg_violation = np.clip(epoch_avg_violation, -0.5, max_violation)
+        
+        # ====================================================================
+        # SAFEGUARD 2: Adaptive dual learning rate based on epoch
+        # ====================================================================
+        if epoch < warmup_epochs:
+            # During warmup: very slow dual updates
+            effective_dual_lr = model.regularizer.dual_lr * 0.1
+        elif epoch < warmup_epochs + ramp_epochs:
+            # During ramp: gradual increase
+            progress = (epoch - warmup_epochs) / ramp_epochs
+            effective_dual_lr = model.regularizer.dual_lr * (0.1 + 0.9 * progress)
+        else:
+            # After ramp: full dual learning rate
+            effective_dual_lr = model.regularizer.dual_lr
+        
+        # ====================================================================
+        # SAFEGUARD 3: Detect and prevent oscillations
+        # ====================================================================
+        if not hasattr(model.regularizer, 'violation_history'):
+            model.regularizer.violation_history = []
+        
+        model.regularizer.violation_history.append(epoch_avg_violation)
+        
+        # Keep last 5 epochs
+        if len(model.regularizer.violation_history) > 5:
+            model.regularizer.violation_history.pop(0)
+        
+        # Check for oscillations (sign changes)
+        if len(model.regularizer.violation_history) >= 3:
+            recent_violations = model.regularizer.violation_history[-3:]
+            sign_changes = sum(1 for i in range(len(recent_violations)-1) 
+                             if recent_violations[i] * recent_violations[i+1] < 0)
+            
+            if sign_changes >= 2:
+                # Oscillating! Reduce learning rate
+                effective_dual_lr *= 0.5
+                print(f"   ⚠️  Oscillation detected, reducing dual LR to {effective_dual_lr:.6f}")
+        
+        # ====================================================================
+        # PERFORM DUAL UPDATE with safeguards
+        # ====================================================================
+        old_dual_lambda = model.regularizer.dual_lambda
+        
+        # Check constraint satisfaction
+        constraint_satisfied = (epoch_avg_violation <= 0)
+        
+        if model.regularizer.enable_dual_restarts and constraint_satisfied:
+            # Constraint satisfied → RESTART
+            model.regularizer.dual_lambda = 0.0
+            update_type = "RESTART"
+        else:
+            # Gradient ascent with effective (reduced) learning rate
+            lambda_hat = model.regularizer.dual_lambda + effective_dual_lr * epoch_avg_violation
+            
+            # Project to non-negative
+            model.regularizer.dual_lambda = max(0.0, lambda_hat)
+            
+            # ================================================================
+            # SAFEGUARD 4: Max dual lambda cap
+            # ================================================================
+            max_dual_lambda = 2.0  # Prevent extreme sparsification
+            model.regularizer.dual_lambda = min(model.regularizer.dual_lambda, max_dual_lambda)
+            
+            update_type = "ASCENT"
+        
+        # ====================================================================
+        # SAFEGUARD 5: Smooth dual lambda changes (exponential moving average)
+        # ====================================================================
+        if not hasattr(model.regularizer, 'dual_lambda_ema'):
+            model.regularizer.dual_lambda_ema = model.regularizer.dual_lambda
+        
+        ema_alpha = 0.7  # Smoothing factor
+        model.regularizer.dual_lambda_ema = (
+            ema_alpha * model.regularizer.dual_lambda_ema + 
+            (1 - ema_alpha) * model.regularizer.dual_lambda
+        )
+        
+        # Use EMA for actual regularization
+        model.regularizer.dual_lambda = model.regularizer.dual_lambda_ema
+        
+        # ====================================================================
+        # LOGGING
+        # ====================================================================
+        print(f"\n   🔧 Dual Update ({update_type}):")
+        print(f"      Violation: {epoch_avg_violation:.6f}")
+        print(f"      Density: {epoch_avg_density*100:.2f}% (target: {model.regularizer.constraint_target*100:.1f}%)")
+        print(f"      λ_dual: {old_dual_lambda:.6f} → {model.regularizer.dual_lambda:.6f}")
+        print(f"      Effective Dual LR: {effective_dual_lr:.6f}")
+        
+        dual_lambda_values.append(model.regularizer.dual_lambda)
+    
+    # ========================================================================
     # COMPUTE EPOCH METRICS
     # ========================================================================
     train_acc = trainer.get_scores()
@@ -487,7 +568,7 @@ def train_epoch(epoch, model, train_loader, optimizer, scheduler, trainer,
     avg_reg_loss = reg_loss_sum / max(1, len(train_loader))
     avg_density = np.mean(batch_densities) if batch_densities else 0.0
     
-    # Base metrics (common to both modes)
+    # Base metrics
     metrics = {
         'accuracy': train_acc,
         'loss': avg_train_loss,
@@ -498,41 +579,31 @@ def train_epoch(epoch, model, train_loader, optimizer, scheduler, trainer,
         'current_lambda': model.regularizer.current_lambda if hasattr(model.regularizer, 'current_lambda') else 0.0,
     }
     
-    # ========================================================================
-    # MODE-SPECIFIC METRICS
-    # ========================================================================
+    # Mode-specific metrics
     if use_constrained:
-        # Constrained mode metrics
-        # Average violation FOR LOGGING ONLY (not used for updates!)
         avg_violation = np.mean(constraint_violations) if constraint_violations else 0.0
+        final_dual_lambda = model.regularizer.dual_lambda
         
-        # Get final dual lambda value (after all batch updates)
-        final_dual_lambda = dual_lambda_values[-1] if dual_lambda_values else model.regularizer.dual_lambda
-        
-        # Check how many batches satisfied constraint
         num_satisfied = sum(1 for v in constraint_violations if v <= 0)
         satisfaction_rate = num_satisfied / max(1, len(constraint_violations))
         
         metrics.update({
             'dual_lambda': final_dual_lambda,
-            'avg_constraint_violation': avg_violation,  # For logging only
-            'lambda_eff': final_dual_lambda,  # Effective lambda is dual lambda
+            'avg_constraint_violation': avg_violation,
+            'lambda_eff': final_dual_lambda,
             'constraint_satisfaction_rate': satisfaction_rate,
             'num_batches_satisfied': num_satisfied,
             'total_batches': len(constraint_violations),
         })
         
-        # Print epoch summary
         print(f"\n   📊 Epoch {epoch+1} Summary (CONSTRAINED MODE):")
         print(f"      Loss: {avg_train_loss:.4f} (cls: {avg_cls_loss:.4f}, reg: {avg_reg_loss:.4f})")
         print(f"      Accuracy: {train_acc:.4f}")
         print(f"      Density: {avg_density*100:.2f}% (target: {model.regularizer.constraint_target*100:.1f}%)")
         print(f"      λ_dual: {final_dual_lambda:.6f}")
-        print(f"      Avg Violation: {avg_violation:.6f}")
         print(f"      Satisfaction Rate: {satisfaction_rate*100:.1f}%")
         
     else:
-        # Penalty mode metrics
         avg_alpha = np.mean(alpha_values) if alpha_values else 1.0
         avg_lambda_eff = np.mean(lambda_eff_values) if lambda_eff_values else 0.0
         
@@ -544,7 +615,6 @@ def train_epoch(epoch, model, train_loader, optimizer, scheduler, trainer,
             'density_deviation': abs(avg_density - model.regularizer.target_density) if hasattr(model.regularizer, 'target_density') else 0.0,
         })
         
-        # Print epoch summary
         print(f"\n   📊 Epoch {epoch+1} Summary (PENALTY MODE):")
         print(f"      Loss: {avg_train_loss:.4f} (cls: {avg_cls_loss:.4f}, reg: {avg_reg_loss:.4f})")
         print(f"      Accuracy: {train_acc:.4f}")
