@@ -2,9 +2,11 @@
 <h1 align="center">LENS: Learnable Edge Network Sparsification for Interpretable Histopathology</h1>
 <!-- Overview Image -->
 <div align="center">
-<img width="1436" alt="Image" src="https://github.com/user-attachments/assets/0aa6df98-e016-404d-9b3a-f1612f386aab" /> 
+<img width="3721" height="3371" alt="lens_verti" src="https://github.com/user-attachments/assets/61a89f7b-0584-47fe-842e-953f97e9c3c7" />
   <p><em>LENS: A graph neural network approach for interpretable histopathology analysis through learnable edge sparsification</em></p>
 </div>
+
+
 
 
 
