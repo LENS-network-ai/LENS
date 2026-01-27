@@ -1,19 +1,36 @@
-Jinja2==3.1.6
-matplotlib==3.10.3
-networkx==3.4.2
-numpy==2.2.6
-opencv_python==4.11.0.86
-openslide_python==1.4.1
-optuna==4.3.0
-pandas==2.2.3
-Pillow==11.2.1
-plotly==6.1.1
-psutil==6.1.1
-scikit_learn==1.6.1
-scipy==1.15.3
-seaborn==0.13.2
-skimage==0.0
-torch==2.4.1
-torch==2.5.1
-torchvision==0.19.1
-tqdm==4.67.1
+# Core ML/DL frameworks
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Data handling
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.14.0
+
+# Image processing
+Pillow>=9.5.0
+opencv-python>=4.7.0
+
+# Progress bars
+tqdm>=4.65.0
+
+# Experiment tracking
+wandb>=0.15.0
+
+# Hyperparameter optimization
+optuna>=3.2.0
+
+# Scientific computing
+scipy>=1.10.0
+
+# Graph/network analysis (optional, if needed)
+networkx>=3.1
+
+# YAML config files (if using)
+pyyaml>=6.0
+
