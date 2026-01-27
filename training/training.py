@@ -1,4 +1,4 @@
-# training/train_edge_gnn.py (or wherever this file is)
+# training/train_edge_gnn.py
 """
 Training wrapper for LENS model with WandB logging and ARM support
 """
@@ -11,7 +11,7 @@ import numpy as np
 import wandb
 from torch.utils.data import DataLoader
 
-from training.analysis import analyze_overfitting, plot_metrics, calculate_class_weights
+from training.analysis import plot_metrics, calculate_class_weights
 from training.training_loop import train_and_evaluate
 from helper import collate
 from utils.lr_scheduler import LR_Scheduler
@@ -32,11 +32,11 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         use_wandb: Whether to use WandB logging
         wandb_project: WandB project name
         fold: Fold number (for cross-validation)
-        run_name: Custom run name (if None, auto-generated)
+        run_name: Custom run name
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # Get L0 method (default to hard-concrete for backward compatibility)
+    # Get L0 method
     l0_method = args.l0_method if hasattr(args, 'l0_method') else 'hard-concrete'
     
     # Create dataloaders
@@ -57,7 +57,7 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
     )
     
     print("\n" + "="*60)
-    print(f"🔹 Training LENS Model ({l0_method.upper()})")
+    print(f"Training LENS Model ({l0_method.upper()})")
     print("="*60)
     
     # Calculate class weights
@@ -66,7 +66,7 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
     # Import model
     from model.LENS2 import ImprovedEdgeGNN
     
-    # Get regularization parameters (support both old and new naming)
+    # Get regularization parameters
     lambda_reg = args.lambda_reg if hasattr(args, 'lambda_reg') else args.beta
     reg_mode = args.reg_mode if hasattr(args, 'reg_mode') else args.egl_mode
     
@@ -93,10 +93,6 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         num_gnn_layers=args.num_gnn_layers,
         num_attention_heads=args.num_attention_heads,
         use_attention_pooling=args.use_attention_pooling,
-        use_constrained=args.use_constrained,
-        constraint_target=args.constraint_target,
-        dual_lr=args.dual_lr,
-        enable_dual_restarts=args.enable_dual_restarts,
         l0_gamma=l0_gamma,
         l0_zeta=l0_zeta,
         l0_beta=l0_beta,
@@ -105,13 +101,13 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
     ).to(device)
     
     # Print model info
-    print(f"\n📋 Model Configuration:")
-    print(f"   → L0 Method: {l0_method}")
-    print(f"   → Regularization: {reg_mode}, λ={lambda_reg}")
-    print(f"   → Warmup Epochs: {args.warmup_epochs}")
-    print(f"   → L0 Params: γ={l0_gamma}, ζ={l0_zeta}, β={l0_beta}")
+    print(f"\nModel Configuration:")
+    print(f"  L0 Method: {l0_method}")
+    print(f"  Regularization: {reg_mode}, λ={lambda_reg}")
+    print(f"  Warmup Epochs: {args.warmup_epochs}")
+    print(f"  L0 Params: γ={l0_gamma}, ζ={l0_zeta}, β={l0_beta}")
     if l0_method == 'arm':
-        print(f"   → ARM Baseline EMA: {baseline_ema}")
+        print(f"  ARM Baseline EMA: {baseline_ema}")
     
     # Initialize optimizer and scheduler
     optimizer = optim.AdamW(
@@ -130,7 +126,7 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
     # Setup WandB
     wandb_config = None
     if use_wandb:
-        # Generate run name if not provided
+        # Generate run name
         if run_name is None:
             fold_str = f"_fold{fold}" if fold is not None else ""
             run_name = f"{l0_method}{fold_str}"
@@ -183,15 +179,15 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
             'job_type': 'train',
         }
         
-        print(f"\n📊 WandB Logging: Enabled")
-        print(f"   → Project: {wandb_project}")
-        print(f"   → Run: {run_name}")
+        print(f"\nWandB Logging: Enabled")
+        print(f"  Project: {wandb_project}")
+        print(f"  Run: {run_name}")
     else:
-        print(f"\n📊 WandB Logging: Disabled")
+        print(f"\nWandB Logging: Disabled")
     
     # Train and evaluate
     print(f"\n{'='*60}")
-    print(f"🚀 Starting Training")
+    print(f"Starting Training")
     print(f"{'='*60}\n")
     
     results = train_and_evaluate(
@@ -222,13 +218,13 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         'config': vars(args),
     }, final_model_path)
     
-    print(f"\n💾 Final model saved: {final_model_path}")
+    print(f"\nFinal model saved: {final_model_path}")
     
     # Save edge weight evolution plot
     if hasattr(model, 'plot_stats'):
         stats_path = os.path.join(output_dir, 'edge_weight_evolution.png')
         model.plot_stats(save_path=stats_path)
-        print(f"📊 Edge weight evolution saved: {stats_path}")
+        print(f"Edge weight evolution saved: {stats_path}")
     
     # Plot training metrics
     metrics_path = os.path.join(output_dir, 'training_metrics.png')
@@ -241,20 +237,13 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         title=f"LENS Training Metrics ({l0_method})",
         warmup_epochs=args.warmup_epochs
     )
-    print(f"📈 Training metrics saved: {metrics_path}")
-    
-    # Analyze overfitting
-    overfitting = analyze_overfitting(
-        results["train_accs"],
-        results["val_accs"],
-        warmup_epochs=args.warmup_epochs
-    )
+    print(f"Training metrics saved: {metrics_path}")
     
     # Save detailed results
-    save_training_results(args, output_dir, results, overfitting, model, l0_method)
+    save_training_results(args, output_dir, results, model, l0_method)
     
     # Print summary
-    print_training_summary(results, overfitting, model, l0_method)
+    print_training_summary(results, model, l0_method)
     
     # Cleanup
     torch.cuda.empty_cache()
@@ -263,13 +252,12 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
     # Return results
     return {
         "results": results,
-        "overfitting": overfitting,
         "model": model,
         "l0_method": l0_method
     }
 
 
-def save_training_results(args, output_dir, results, overfitting, model, l0_method):
+def save_training_results(args, output_dir, results, model, l0_method):
     """Save comprehensive training results to file"""
     results_path = os.path.join(output_dir, 'training_results.txt')
     
@@ -283,11 +271,9 @@ def save_training_results(args, output_dir, results, overfitting, model, l0_meth
         
         f.write(f"L0 Method: {l0_method}\n")
         
-        # Lambda/regularization
         lambda_value = args.lambda_reg if hasattr(args, 'lambda_reg') else args.beta
-        f.write(f"Lambda (λ): {lambda_value}\n")
+        f.write(f"Lambda: {lambda_value}\n")
         
-        # Regularization mode
         reg_mode = args.reg_mode if hasattr(args, 'reg_mode') else args.egl_mode
         f.write(f"Regularization Mode: {reg_mode}\n")
         
@@ -298,9 +284,9 @@ def save_training_results(args, output_dir, results, overfitting, model, l0_meth
             l0_beta = args.l0_beta if hasattr(args, 'l0_beta') else 0.66
             
             f.write(f"L0 Parameters:\n")
-            f.write(f"  - gamma (γ): {l0_gamma}\n")
-            f.write(f"  - zeta (ζ): {l0_zeta}\n")
-            f.write(f"  - beta (β): {l0_beta}\n")
+            f.write(f"  - gamma: {l0_gamma}\n")
+            f.write(f"  - zeta: {l0_zeta}\n")
+            f.write(f"  - beta: {l0_beta}\n")
             
             if l0_method == 'arm':
                 baseline_ema = args.baseline_ema if hasattr(args, 'baseline_ema') else 0.9
@@ -332,7 +318,7 @@ def save_training_results(args, output_dir, results, overfitting, model, l0_meth
         f.write(f"Best Epoch: {results['best_epoch']}\n")
         
         if 'best_edge_sparsity' in results:
-            f.write(f"Edge Sparsity at Best: {results['best_edge_sparsity']:.1f}% (edges > 0.1)\n")
+            f.write(f"Edge Sparsity at Best: {results['best_edge_sparsity']:.1f}%\n")
         
         f.write(f"\nFinal Epoch:\n")
         f.write(f"  - Train Accuracy: {results['train_accs'][-1]:.4f}\n")
@@ -346,50 +332,6 @@ def save_training_results(args, output_dir, results, overfitting, model, l0_meth
                     final_density = model.stats_tracker.edge_density_history[-1]
                     f.write(f"  - Final Edge Density: {final_density:.4f}\n")
         
-        # Overfitting Analysis
-        f.write(f"\n{'='*60}\n")
-        f.write("OVERFITTING ANALYSIS\n")
-        f.write("-" * 40 + "\n")
-        
-        f.write(f"Severity: {overfitting['severity']}\n")
-        f.write(f"Average Train-Val Gap (post-warmup): {overfitting['avg_post_warmup_gap']:.4f}\n")
-        f.write(f"Maximum Train-Val Gap: {overfitting['max_gap']:.4f}\n")
-        f.write(f"Max Gap Epoch: {overfitting['max_gap_epoch']}\n")
-        
-        # Recommendations
-        f.write(f"\n{'='*60}\n")
-        f.write("RECOMMENDATIONS\n")
-        f.write("-" * 40 + "\n")
-        
-        if overfitting['severity'] != "None":
-            f.write(f"Model shows {overfitting['severity'].lower()} overfitting.\n\n")
-            
-            if overfitting['severity'] == "Severe":
-                f.write("Suggestions:\n")
-                f.write("  1. Increase lambda (try 2-3x current value)\n")
-                f.write("  2. Increase dropout (try 0.3-0.4)\n")
-                f.write("  3. Increase weight decay\n")
-                f.write("  4. Reduce model capacity\n")
-                if l0_method == 'hard-concrete':
-                    f.write("  5. Consider switching to ARM for direct binary sampling\n")
-                    
-            elif overfitting['severity'] == "Moderate":
-                f.write("Suggestions:\n")
-                f.write("  1. Increase lambda by 50-100%\n")
-                f.write("  2. Slightly increase dropout\n")
-                f.write("  3. Add more data augmentation\n")
-                
-            else:  # Mild
-                f.write("Suggestions:\n")
-                f.write("  1. Minor tweaks to lambda and/or dropout\n")
-                f.write("  2. Monitor for longer training\n")
-        else:
-            f.write("Model shows good generalization! ✓\n\n")
-            f.write("Suggestions:\n")
-            f.write("  1. Experiment with different regularization strengths\n")
-            f.write("  2. Try slightly decreasing lambda to allow more edges\n")
-            f.write("  3. Consider ensemble methods for further improvement\n")
-        
         # Method-specific notes
         f.write(f"\n{'='*60}\n")
         f.write(f"METHOD-SPECIFIC NOTES ({l0_method.upper()})\n")
@@ -397,46 +339,41 @@ def save_training_results(args, output_dir, results, overfitting, model, l0_meth
         
         if l0_method == 'hard-concrete':
             f.write("Hard-Concrete Relaxation:\n")
-            f.write("  ✓ Continuous relaxation provides stable gradients\n")
-            f.write("  ✓ Proven method for graph sparsification\n")
-            f.write("  → Consider ARM if you need truly binary gates during training\n")
+            f.write("  - Continuous relaxation provides stable gradients\n")
+            f.write("  - Proven method for graph sparsification\n")
+            f.write("  - Consider ARM if you need binary gates during training\n")
             
         elif l0_method == 'arm':
             f.write("ARM (Augment-REINFORCE-Merge):\n")
-            f.write("  ✓ Direct binary sampling during training\n")
-            f.write("  ✓ Control variates reduce gradient variance\n")
-            f.write("  → Check gradient variance in WandB logs\n")
-            f.write("  → If unstable, try increasing baseline_ema\n")
+            f.write("  - Direct binary sampling during training\n")
+            f.write("  - Control variates reduce gradient variance\n")
+            f.write("  - Check gradient variance in WandB logs\n")
+            f.write("  - If unstable, try increasing baseline_ema\n")
     
-    print(f"\n📄 Detailed results saved: {results_path}")
+    print(f"\nDetailed results saved: {results_path}")
 
 
-def print_training_summary(results, overfitting, model, l0_method):
+def print_training_summary(results, model, l0_method):
     """Print comprehensive training summary"""
     print("\n" + "="*60)
-    print(f"📊 LENS TRAINING SUMMARY ({l0_method.upper()})")
+    print(f"LENS TRAINING SUMMARY ({l0_method.upper()})")
     print("="*60)
     
-    print(f"\n🎯 Performance:")
-    print(f"   → Best Val Accuracy: {results['best_val_acc']:.4f} (Epoch {results['best_epoch']})")
+    print(f"\nPerformance:")
+    print(f"  Best Val Accuracy: {results['best_val_acc']:.4f} (Epoch {results['best_epoch']})")
     
     if 'best_edge_sparsity' in results:
-        print(f"   → Edge Sparsity: {results['best_edge_sparsity']:.1f}% (edges > 0.1)")
+        print(f"  Edge Sparsity: {results['best_edge_sparsity']:.1f}%")
     
-    print(f"\n📈 Final Epoch:")
-    print(f"   → Train Accuracy: {results['train_accs'][-1]:.4f}")
-    print(f"   → Val Accuracy: {results['val_accs'][-1]:.4f}")
-    print(f"   → Gap: {abs(results['train_accs'][-1] - results['val_accs'][-1]):.4f}")
-    
-    print(f"\n⚠️  Overfitting: {overfitting['severity']}")
-    if overfitting['severity'] != "None":
-        print(f"   → Avg Gap (post-warmup): {overfitting['avg_post_warmup_gap']:.4f}")
-        print(f"   → Max Gap: {overfitting['max_gap']:.4f} (Epoch {overfitting['max_gap_epoch']})")
+    print(f"\nFinal Epoch:")
+    print(f"  Train Accuracy: {results['train_accs'][-1]:.4f}")
+    print(f"  Val Accuracy: {results['val_accs'][-1]:.4f}")
+    print(f"  Gap: {abs(results['train_accs'][-1] - results['val_accs'][-1]):.4f}")
     
     if hasattr(model, 'stats_tracker'):
         if hasattr(model.stats_tracker, 'edge_density_history'):
             if len(model.stats_tracker.edge_density_history) > 0:
                 final_density = model.stats_tracker.edge_density_history[-1]
-                print(f"\n🔗 Final Edge Density: {final_density:.4f}")
+                print(f"\nFinal Edge Density: {final_density:.4f}")
     
     print("\n" + "="*60)
