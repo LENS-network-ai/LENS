@@ -132,7 +132,7 @@ The heatmap uses JET colormap where red indicates high edge connectivity (import
 LENS demonstrates robust discriminative power while utilizing only ~30% of the graph edges, indicating efficient extraction of relevant structural information.
 
 <div align="center">
-<img width="3000" height="3375" alt="cptac_heatmaps" src="https://github.com/user-attachments/assets/242d13fe-1b5c-4fdc-914b-cca930d2308a" />
+<img width="3000" height="1375" alt="cptac_heatmaps" src="https://github.com/user-attachments/assets/242d13fe-1b5c-4fdc-914b-cca930d2308a" />
 </div>
 
 
