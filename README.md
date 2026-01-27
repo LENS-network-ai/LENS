@@ -78,191 +78,11 @@ In our work we have mainly used the pretrained feature extractor from GTP work: 
     └── test_list.txt              # Test samples 30 %(CPTAC IDs)
 ```
 ### Step 3: Model Training
-There are two ways to run LENS model:
-
-1. **Standard Training**: Train the model with fixed hyperparameters
-2. **Bayesian Optimization**: Automatically find optimal hyperparameters based on validation accuracy and sparsity
-
-### Standard Training
-
-To run standard training with cross-validation:
-
-```bash
-python main.py \
-  --data-root /path/to/data \
-  --train-list /path/to/train_list.txt \
-  --batch-size 1 \
-  --epochs 80 \
-  --lambda-reg 0.00001 \
-  --reg-mode l0 \
-  --warmup-epochs 60 \
-  --min-edges-per-node 2
-```
-
-#### Key Parameters
-
-- `--data-root`: Directory containing the graph data
-- `--train-list`: File with list of training examples
-- `--lambda-reg`: Regularization strength (λ) controlling sparsity (lower = less pruning)
-- `--reg-mode`: Regularization type (`l0` or `egl`)
-- `--warmup-epochs`: Number of epochs with gradually increasing regularization
-- `--min-edges-per-node`: Minimum edges to maintain per node
-
-#### L0 Specific Parameters
-
-When using L0 regularization, you can customize the following:
-
-```bash
-python main.py \
-  --data-root /path/to/data \
-  --train-list /path/to/train_list.txt \
-  --reg-mode l0 \
-  --lambda-reg 0.00001 \
-  --l0-gamma -0.1 \
-  --l0-zeta 1.1 \
-  --l0-beta 0.66 \
-  --initial-temp 5.0
-```
-
-- `--l0-gamma`: Lower bound of hard sigmoid (default: -0.1)
-- `--l0-zeta`: Upper bound of hard sigmoid (default: 1.1)
-- `--l0-beta`: Temperature parameter for L0 regularization (default: 0.66)
-- `--initial-temp`: Initial temperature for edge gating (default: 5.0)
-
-### Bayesian Optimization
-
-To automatically find optimal parameters balancing accuracy and sparsity:
-
-```bash
-python main.py \
-  --data-root /path/to/data \
-  --train-list /path/to/train_list.txt \
-  --batch-size 1 \
-  --epochs 80 \
-  --run-bayesian-opt \
-  --n-trials 30 \
-  --target-sparsity 0.7 \
-  --sparsity-penalty 5.0
-```
-
-#### Optimization Parameters
-
-- `--run-bayesian-opt`: Flag to activate Bayesian optimization
-- `--n-trials`: Number of optimization trials to run (default: 50)
-- `--target-sparsity`: Target sparsity rate to aim for (0.0-1.0)
-- `--sparsity-penalty`: Weight for sparsity deviation penalty (higher = stricter adherence to target)
-
-The optimization objective is: `O = Accuracy − sparsity_penalty · |SparsityRate − Target|`
-
-#### Optimized Parameters
-
-The Bayesian optimization will search for optimal values of:
-- `lambda_reg`: Regularization strength
-- `warmup_epochs`: Number of warmup epochs
-- `l0_gamma`, `l0_zeta`, `l0_beta`: L0 regularization parameters
-- `initial_temp`: Temperature parameter
-
-### Output
-
-Both training modes will create an output directory with:
-- Model checkpoints
-- Training metrics
-- Graph visualizations
-- Sparsification reports
-- Edge weight distributions
-
-For Bayesian optimization, additional outputs include:
-- Parameter importance analysis
-- Optimization history plots
-- Detailed trial results
-
-
-## Graph Sparsification Process
-
-During training, the model goes through the following stages:
-
-1. **Warmup Phase** (controlled by `warmup_epochs`):
-   - Regularization strength gradually increases
-   - All edges are initially kept to learn basic representations
-   - Temperature parameter starts high for exploration
-
-2. **Sparsification Phase**:
-   - Full regularization applied
-   - Edge weights shift toward binary (0 or 1)
-   - Temperature annealing to sharpen decisions
-
-3. **Refinement Phase**:
-   - Fine-tuning of edge weights
-   - Optimization focuses on important connections
-   - Sparsity pattern stabilizes
-
-## Cross-Validation
-
-The model automatically performs cross-validation using the specified number of folds:
-
-```bash
-python main.py \
-  --data-root /path/to/data \
-  --train-list /path/to/train_list.txt \
-  --n-folds 5 \
-  --reg-mode l0 \
-  --lambda-reg 0.00001
-```
-
-After training completes, detailed cross-validation results are displayed and saved, including:
-- Average validation accuracy across folds
-- Average edge sparsity
-- Variance in performance
-- Overfitting analysis
-- Recommendations for hyperparameter adjustments
-
-<img src="https://github.com/user-attachments/assets/eee7e786-9605-4c5a-b032-c5abd81998db" width="400"/>
 
 ### Step 4: Testing
 
 
 
-The testing script evaluates trained models with bootstrap statistical analysis, providing confidence intervals for ROC/PR curves and saving weighted adjacency matrices for visualization.
-
-### Usage
-
-    python Test.py \
-      --model-path /path/to/pretrained/model.pt \
-      --test-data /path/to/test/data.txt \
-      --data-root /path/to/graph/data \
-      --lambda-reg 0.000182 \
-      --reg-mode l0 \
-      --l0-gamma -0.12 \
-      --l0-zeta 1.09 \
-      --l0-beta 0.72 \
-      --n-bootstrap 10000 \
-      --output-dir test_results
-
-### Key Parameters
-
-- `--model-path`: Path to trained model checkpoint
-- `--test-data`: Text file with test sample IDs  
-- `--lambda-reg`: Regularization strength (use optimized value)
-- `--reg-mode`: Regularization type (l0 recommended)
-- `--n-bootstrap`: Bootstrap iterations for confidence intervals (default: 10000)
-
-### Output
-
-The script generates three types of outputs:
-
-#### Statistical Results
-    test_results/comprehensive_results.txt    # Detailed metrics with bootstrap CI
-
-#### Visualization Files  
-    test_results/roc_pr_curves_combined.png   # ROC/PR curves for all classes
-    test_results/roc_pr_class_0.png           # Individual class curves
-
-#### Weighted Adjacencies
-    test_results/weighted_adjacencies/        # Learned sparse adjacencies for visualization
-    ├── sample_001_weighted_adj.pt
-    └── sample_002_weighted_adj.pt
-
-The comprehensive results file contains accuracy, F1 scores, ROC/PR AUC values with 95% confidence intervals, and confusion matrices. Sparse adjacency matrices can be used to generate heatmaps in the next step.
 ### Step 5: Visualization
 
 
@@ -309,30 +129,17 @@ The heatmap uses JET colormap where red indicates high edge connectivity (import
 
 ## 📊 Results
 
-LENS demonstrates robust discriminative power while utilizing only ~25% of the graph edges, indicating efficient extraction of relevant structural information.
+LENS demonstrates robust discriminative power while utilizing only ~30% of the graph edges, indicating efficient extraction of relevant structural information.
 
 <div align="center">
- <img width="1128" alt="Image" src="https://github.com/user-attachments/assets/3f0170c7-21c1-4048-94cb-1f5645237994" />
+<img width="6000" height="3375" alt="cptac_heatmaps" src="https://github.com/user-attachments/assets/242d13fe-1b5c-4fdc-914b-cca930d2308a" />
 </div>
 
-## 📚 Citation
 
-If you use LENS in your research, please cite our paper:
 
-```bibtex
-@article{
-}
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
 
-# LENS-
-# Lens_plus
-# Lens_plus
