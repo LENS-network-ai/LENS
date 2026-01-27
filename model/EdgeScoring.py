@@ -47,7 +47,7 @@ class EdgeScoringNetwork(nn.Module):
         
         # Edge scoring MLP: [src_feat || tgt_feat || attended_diff]
         self.edge_mlp = nn.Sequential(
-            spectral_norm(nn.Linear(feature_dim * 2 + feature_dim, edge_dim)),
+            spectral_norm(nn.Linear(feature_dim *3, edge_dim)),
             nn.ReLU(),
             nn.Dropout(dropout),
             spectral_norm(nn.Linear(edge_dim, edge_dim)),
