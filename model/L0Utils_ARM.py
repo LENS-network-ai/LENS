@@ -1,7 +1,7 @@
 # L0Utils_ARM.py
 """
 ARM (Augment-REINFORCE-Merge) implementation for L0 regularization
-Reference: Yin & Zhou (2019) - ARM: Augment-REINFORCE-Merge Gradient
+Reference: Yin & Zhou (2019)
 """
 
 import torch
@@ -15,10 +15,10 @@ class ARML0RegularizerParams:
     def __init__(self, gamma=-0.1, zeta=1.1, baseline_ema=0.9, eps=1e-20):
         """
         Args:
-            gamma: Lower stretch bound (same as Hard-Concrete)
-            zeta: Upper stretch bound (same as Hard-Concrete)
-            baseline_ema: Exponential moving average coefficient for baseline
-            eps: Small constant for numerical stability
+            gamma: Lower stretch bound
+            zeta: Upper stretch bound
+            baseline_ema: EMA coefficient for baseline
+            eps: Numerical stability constant
         """
         self.gamma = gamma
         self.zeta = zeta
@@ -39,15 +39,14 @@ def arm_sample_gates(logAlpha, params, training=True):
     Sample binary gates using ARM method
     
     Args:
-        logAlpha: Edge logits (log of alpha)
+        logAlpha: Edge logits
         params: ARML0RegularizerParams instance
-        training: If True, sample stochastically; else deterministic
+        training: If True, stochastic; else deterministic
     
     Returns:
         gates: Binary edge gates (0 or 1)
-        gates_anti: Antithetic samples (for ARM gradient)
+        gates_anti: Antithetic samples for ARM gradient
     """
-    # Compute keep probability
     pi = torch.sigmoid(logAlpha)
     
     if training:
@@ -55,7 +54,7 @@ def arm_sample_gates(logAlpha, params, training=True):
         u = torch.rand_like(pi)
         b = (u < pi).float()
         
-        # Antithetic sample (control variate for variance reduction)
+        # Antithetic sample for variance reduction
         b_anti = 1.0 - b
         
         # Store for gradient computation
@@ -86,10 +85,10 @@ def compute_arm_loss(loss_b, loss_b_anti, logAlpha, params):
     pi = params.last_pi
     b = params.last_b
     
-    # Difference between loss with b and b_anti (control variate)
+    # Difference between loss with b and b_anti
     f_diff = loss_b - loss_b_anti
     
-    # Update running baseline (exponential moving average)
+    # Update running baseline (EMA)
     if params.baseline is None:
         params.baseline = f_diff.detach()
     else:
@@ -99,8 +98,7 @@ def compute_arm_loss(loss_b, loss_b_anti, logAlpha, params):
     # Center the difference using baseline
     centered_diff = f_diff - params.baseline
     
-    # ARM gradient: ∇_θ E[f(b)] ≈ (f(b) - f(b̃) - baseline) * (b - π)
-    # We create a "pseudo-loss" that gives correct gradients when differentiated
+    # ARM gradient: pseudo-loss that gives correct gradients
     pseudo_loss = (centered_diff.detach() * (b - pi.detach()) * logAlpha).sum()
     
     return pseudo_loss
@@ -108,7 +106,7 @@ def compute_arm_loss(loss_b, loss_b_anti, logAlpha, params):
 
 def get_expected_l0_arm(logAlpha, params):
     """
-    Compute expected L0 penalty (same formula as Hard-Concrete)
+    Compute expected L0 penalty
     
     Args:
         logAlpha: Edge logits
@@ -121,5 +119,5 @@ def get_expected_l0_arm(logAlpha, params):
     return pi.sum()
 
 
-# Create default global instance
+# Default instance
 arm_params = ARML0RegularizerParams()
