@@ -11,13 +11,13 @@ from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import Subset
 
 from training.training import train_edge_gnn
-from utils.dataset import GraphDataset  # Your existing dataset class
+from utils.dataset import GraphDataset
 from utils.config import get_parser
 
 def run_bayesian_optimization(args):
     """Run Bayesian optimization to find optimal parameters"""
     print("\n" + "="*60)
-    print(" STARTING BAYESIAN OPTIMIZATION")
+    print("STARTING BAYESIAN OPTIMIZATION")
     print("="*60)
     print(f"Target sparsity: {args.target_sparsity}")
     print(f"Sparsity penalty weight: {args.sparsity_penalty}")
@@ -76,7 +76,7 @@ def run_bayesian_optimization(args):
         fold_results = {}
         
         for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(dataset)), all_labels)):
-            print(f"\n🔹 Trial {trial.number}, Fold {fold+1}/{args.n_folds}")
+            print(f"\nTrial {trial.number}, Fold {fold+1}/{args.n_folds}")
             fold_dir = os.path.join(trial_dir, f"fold{fold+1}")
             os.makedirs(fold_dir, exist_ok=True)
             
@@ -94,19 +94,19 @@ def run_bayesian_optimization(args):
         edge_sparsities = []
         for fold in range(args.n_folds):
             if "best_edge_sparsity" in fold_results[f"fold{fold+1}"]["results"]:
-                # Convert percentage to fraction (0-1) for the objective function
+                # Convert percentage to fraction for objective function
                 edge_sparsity = fold_results[f"fold{fold+1}"]["results"]["best_edge_sparsity"] / 100.0
                 edge_sparsities.append(edge_sparsity)
         
         mean_acc = np.mean(val_accs)
         
-        # If sparsity couldn't be computed, heavily penalize the objective
+        # If sparsity couldn't be computed, heavily penalize
         if not edge_sparsities:
             return mean_acc - args.sparsity_penalty
         
         mean_sparsity = np.mean(edge_sparsities)
         
-        # Calculate objective with target sparsity penalty: O = Accval − λ · |SparsityRate − Target|
+        # Calculate objective with target sparsity penalty
         objective_value = mean_acc - args.sparsity_penalty * abs(mean_sparsity - args.target_sparsity)
         
         # Log the components
@@ -128,8 +128,8 @@ def run_bayesian_optimization(args):
             f.write(f"  Sparsity Penalty: {args.sparsity_penalty * abs(mean_sparsity - args.target_sparsity):.4f}\n")
             f.write(f"  Objective Value: {objective_value:.4f}\n")
         
-        print(f"\n Trial {trial.number} finished with objective value: {objective_value:.4f}")
-        print(f"   Accuracy: {mean_acc:.4f}, Sparsity: {mean_sparsity:.4f}, Target: {args.target_sparsity:.4f}")
+        print(f"\nTrial {trial.number} finished with objective value: {objective_value:.4f}")
+        print(f"  Accuracy: {mean_acc:.4f}, Sparsity: {mean_sparsity:.4f}, Target: {args.target_sparsity:.4f}")
         
         return objective_value
     
@@ -145,7 +145,7 @@ def run_bayesian_optimization(args):
     print("\n" + "="*60)
     print("BAYESIAN OPTIMIZATION RESULTS")
     print("="*60)
-    print(f"Best λ value: {best_params['lambda_reg']:.6f}")
+    print(f"Best lambda value: {best_params['lambda_reg']:.6f}")
     print(f"Best warmup_epochs: {best_params['warmup_epochs']}")
     print(f"Best initial_temp: {best_params['initial_temp']:.2f}")
     print(f"Best L0 parameters: gamma={best_params['l0_gamma']:.3f}, zeta={best_params['l0_zeta']:.3f}, beta={best_params['l0_beta']:.3f}")
@@ -232,11 +232,11 @@ def run_standard_training(args):
     fold_results = {}
     
     for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(dataset)), all_labels)):
-        print(f"\n Fold {fold+1}/{args.n_folds}")
+        print(f"\nFold {fold+1}/{args.n_folds}")
         fold_dir = os.path.join(args.output_dir, f"fold{fold+1}")
         os.makedirs(fold_dir, exist_ok=True)
         
-        # Train ImprovedEdgeGNN model for this fold
+        # Train model for this fold
         fold_results[f"fold{fold+1}"] = train_edge_gnn(
             dataset=dataset,
             train_idx=train_idx,
@@ -268,8 +268,8 @@ def summarize_cross_validation(fold_results, args):
         avg_sparsity = None
         std_sparsity = None
     
-    # Get regularization parameter name (lambda or beta)
-    reg_param_name = "Lambda (λ)" if hasattr(args, 'lambda_reg') else "Beta"
+    # Get regularization parameter name
+    reg_param_name = "Lambda" if hasattr(args, 'lambda_reg') else "Beta"
     reg_param_value = args.lambda_reg if hasattr(args, 'lambda_reg') else args.beta
     
     # Get regularization mode name
@@ -278,7 +278,7 @@ def summarize_cross_validation(fold_results, args):
     
     write_cv_summary(args, fold_results, avg_acc, std_acc, avg_sparsity, std_sparsity, 
                     reg_param_name, reg_param_value, reg_mode_name, reg_mode_value)
-    print_cv_summary(avg_acc, std_acc, avg_sparsity, fold_results, args,
+    print_cv_summary(avg_acc, std_acc, avg_sparsity, std_sparsity, fold_results, args,
                    reg_param_name, reg_param_value, reg_mode_name, reg_mode_value)
 
 def write_cv_summary(args, fold_results, avg_acc, std_acc, avg_sparsity, std_sparsity,
@@ -290,9 +290,9 @@ def write_cv_summary(args, fold_results, avg_acc, std_acc, avg_sparsity, std_spa
         
         f.write("IMPROVED EDGE GNN\n")
         f.write("-" * 20 + "\n")
-        f.write(f"Average Validation Accuracy: {avg_acc:.4f} ± {std_acc:.4f}\n")
+        f.write(f"Average Validation Accuracy: {avg_acc:.4f} +/- {std_acc:.4f}\n")
         if avg_sparsity is not None:
-            f.write(f"Average Edge Sparsity: {avg_sparsity:.1f}% ± {std_sparsity:.1f}% edges > 0.1\n\n")
+            f.write(f"Average Edge Sparsity: {avg_sparsity:.1f}% +/- {std_sparsity:.1f}%\n\n")
         
         f.write("MODEL CONFIGURATION\n")
         f.write("-" * 20 + "\n")
@@ -321,17 +321,16 @@ def write_cv_summary(args, fold_results, avg_acc, std_acc, avg_sparsity, std_spa
                 f.write(f", Sparsity={results['results']['best_edge_sparsity']:.1f}%\n")
             else:
                 f.write("\n")
-            f.write(f"Overfitting: {results['overfitting']['severity']} (Gap: {results['overfitting']['avg_post_warmup_gap']:.4f})\n\n")
 
-def print_cv_summary(avg_acc, std_acc, avg_sparsity, fold_results, args,
+def print_cv_summary(avg_acc, std_acc, avg_sparsity, std_sparsity, fold_results, args,
                     reg_param_name, reg_param_value, reg_mode_name, reg_mode_value):
-    """Print cross-validation summary and final recommendations"""
+    """Print cross-validation summary and recommendations"""
     print("\n" + "="*60)
-    print("🏆 CROSS-VALIDATION COMPLETE")
+    print("CROSS-VALIDATION COMPLETE")
     print("="*60)
-    print(f"ImprovedEdgeGNN: {avg_acc:.4f} ± {std_acc:.4f}")
+    print(f"ImprovedEdgeGNN: {avg_acc:.4f} +/- {std_acc:.4f}")
     if avg_sparsity is not None:
-        print(f"Average Edge Sparsity: {avg_sparsity:.1f}% ± {std_sparsity:.1f}% edges > 0.1")
+        print(f"Average Edge Sparsity: {avg_sparsity:.1f}% +/- {std_sparsity:.1f}%")
     
     # Print L0 specific parameters if applicable
     if reg_mode_value == 'l0' and hasattr(args, 'l0_gamma'):
@@ -343,44 +342,28 @@ def print_cv_summary(avg_acc, std_acc, avg_sparsity, fold_results, args,
             print(f"  Initial Temperature: {args.initial_temp}")
     
     # Final recommendations
-    print("\n🔍 FINAL RECOMMENDATIONS:")
+    print("\nFINAL RECOMMENDATIONS:")
     
-    # Calculate average overfitting across folds
-    avg_gap = sum(fold_results[f"fold{fold+1}"]["overfitting"]["avg_post_warmup_gap"] 
-                 for fold in range(args.n_folds)) / args.n_folds
-    
-    # Calculate average sparsity across folds
+    # Analyze sparsity
     if avg_sparsity is not None:
         if avg_sparsity < 5.0:
-            print(" Your model is pruning too aggressively:")
-            print(f"- Only {avg_sparsity:.1f}% of edges have weight > 0.1")
-            print(f"- Consider decreasing {reg_param_name.lower()} or increasing warmup epochs")
+            print("Model is pruning too aggressively:")
+            print(f"  - Only {avg_sparsity:.1f}% of edges have weight > 0.1")
+            print(f"  - Consider decreasing {reg_param_name.lower()} or increasing warmup epochs")
             if reg_mode_value == 'l0':
-                print("- Try adjusting L0 parameters (increase beta_l0, decrease gamma)")
+                print("  - Try adjusting L0 parameters (increase beta_l0, decrease gamma)")
         elif avg_sparsity > 50.0:
-            print(" Your model is not pruning enough:")
-            print(f"- {avg_sparsity:.1f}% of edges have weight > 0.1")
-            print(f"- Consider increasing {reg_param_name.lower()}")
+            print("Model is not pruning enough:")
+            print(f"  - {avg_sparsity:.1f}% of edges have weight > 0.1")
+            print(f"  - Consider increasing {reg_param_name.lower()}")
             if reg_mode_value == 'l0':
-                print("- Try adjusting L0 parameters (decrease beta_l0)")
+                print("  - Try adjusting L0 parameters (decrease beta_l0)")
         else:
-            print(f" Edge sparsity looks good: {avg_sparsity:.1f}% of edges have weight > 0.1")
-    
-    if avg_gap > 0.2:
-        print(" Your model shows significant overfitting across folds:")
-        print("- Try increasing dropout to 0.3-0.4")
-        print("- Consider increasing weight decay to 5e-4")
-        print("- Try decreasing the edge dimension")
-    elif avg_gap > 0.1:
-        print(" Your model shows moderate overfitting:")
-        print("- Consider increasing dropout slightly")
-        print("- Try different regularization modes")
-    else:
-        print(" Your model shows good generalization!")
+            print(f"Edge sparsity looks good: {avg_sparsity:.1f}% of edges have weight > 0.1")
     
     # Output analysis location
-    print(f"\n Detailed graph analysis and reports can be found in:")
-    print(f"   {args.output_dir}")
+    print(f"\nDetailed graph analysis and reports can be found in:")
+    print(f"  {args.output_dir}")
 
 def main():
     # Parse arguments
@@ -391,7 +374,7 @@ def main():
     if args.run_bayesian_opt:
         # Run Bayesian optimization
         best_params, best_value, output_dir = run_bayesian_optimization(args)
-        print(f"\n Bayesian optimization complete! Best parameters saved to {output_dir}")
+        print(f"\nBayesian optimization complete! Best parameters saved to {output_dir}")
     else:
         # Run standard cross-validation training
         run_standard_training(args)
