@@ -2,15 +2,13 @@
 """
 LENS2 Model Testing Script - Auto-Configuration Version
 
-This script automatically detects ALL hyperparameters from checkpoint
-and tests your LENS2 model with minimal configuration needed.
+Automatically detects all hyperparameters from checkpoint and tests LENS2 model.
 
 Features:
 - Auto-detects architecture, regularization, and optimization parameters
 - Bootstrap ROC/PR analysis with confidence intervals
 - Edge sparsity analysis
 - Publication-quality visualizations
-- Works with both constrained and penalty optimization modes
 
 Usage:
     python test_lens2_auto.py \
@@ -40,41 +38,33 @@ from tqdm import tqdm
 import json
 from collections import defaultdict
 
-# Import your modules
 from utils.dataset import GraphDataset
 from model.LENS2 import ImprovedEdgeGNN
 from helper import Evaluator, collate, preparefeatureLabel
 
 
-# ============================================================================
-# CONFIGURATION EXTRACTION
-# ============================================================================
-
 def extract_config_from_checkpoint(checkpoint_path, device='cpu'):
     """
-    Extract ALL configuration from checkpoint
+    Extract all configuration from checkpoint
     
     Returns:
         config: Dictionary with all model parameters
     """
     print(f"\n{'='*70}")
-    print(f"📋 EXTRACTING CONFIGURATION FROM CHECKPOINT")
+    print(f"EXTRACTING CONFIGURATION FROM CHECKPOINT")
     print(f"{'='*70}")
     
     try:
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     except Exception as e:
-        print(f"❌ Error loading checkpoint: {e}")
+        print(f"Error loading checkpoint: {e}")
         sys.exit(1)
     
     # Initialize config with defaults
     config = {
-        # Basic info
         'checkpoint_path': checkpoint_path,
         'epoch': checkpoint.get('epoch', 'unknown'),
         'best_val_accuracy': checkpoint.get('best_val_accuracy', 'unknown'),
-        
-        # Architecture
         'feature_dim': 512,
         'hidden_dim': 256,
         'num_classes': 3,
@@ -83,20 +73,12 @@ def extract_config_from_checkpoint(checkpoint_path, device='cpu'):
         'num_attention_heads': 4,
         'use_attention_pooling': True,
         'dropout': 0.2,
-        
-        # Regularization
         'reg_mode': 'l0',
         'l0_method': 'hard-concrete',
         'lambda_reg': 0.01,
-        'use_constrained': False,
-        'constraint_target': 0.30,
-        
-        # L0 parameters
         'l0_gamma': -0.1,
         'l0_zeta': 1.1,
         'l0_beta': 0.66,
-        
-        # Schedule
         'warmup_epochs': 15,
         'initial_temp': 5.0,
         'graph_size_adaptation': False,
@@ -105,32 +87,29 @@ def extract_config_from_checkpoint(checkpoint_path, device='cpu'):
     
     # Extract from checkpoint if available
     if 'config' in checkpoint:
-        ckpt_config = checkpoint['config']
-        config.update(ckpt_config)
+        config.update(checkpoint['config'])
     
-    # Extract from hyperparameters if available
     if 'hyperparameters' in checkpoint:
-        hypers = checkpoint['hyperparameters']
-        config.update(hypers)
+        config.update(checkpoint['hyperparameters'])
     
     # Try to infer from state_dict
     state_dict = checkpoint.get('model_state_dict', {})
     
-    # Infer num_classes from classifier
+    # Infer num_classes
     for key in state_dict.keys():
         if 'classifier' in key and 'weight' in key:
             if state_dict[key].dim() >= 2:
                 config['num_classes'] = state_dict[key].shape[0]
                 break
     
-    # Infer hidden_dim from GNN layers
+    # Infer hidden_dim
     for key in state_dict.keys():
         if 'gnn_layers.0' in key and 'weight' in key:
             if state_dict[key].dim() >= 2:
                 config['hidden_dim'] = state_dict[key].shape[0]
                 break
     
-    # Infer edge_dim from edge_scorer
+    # Infer edge_dim
     for key in state_dict.keys():
         if 'edge_scorer.edge_mlp.0' in key and 'weight' in key:
             if state_dict[key].dim() >= 2:
@@ -149,38 +128,30 @@ def extract_config_from_checkpoint(checkpoint_path, device='cpu'):
     if max_gnn_layer > 0:
         config['num_gnn_layers'] = max_gnn_layer + 1
     
-    # Print extracted configuration
+    # Print configuration
     print(f"\n  Model Information:")
-    print(f"  • Checkpoint Epoch: {config['epoch']}")
-    print(f"  • Best Val Accuracy: {config.get('best_val_accuracy', 'N/A')}")
+    print(f"  Checkpoint Epoch: {config['epoch']}")
+    print(f"  Best Val Accuracy: {config.get('best_val_accuracy', 'N/A')}")
     
     print(f"\n  Architecture:")
-    print(f"  • Feature Dim: {config['feature_dim']}")
-    print(f"  • Hidden Dim: {config['hidden_dim']}")
-    print(f"  • Edge Dim: {config['edge_dim']}")
-    print(f"  • Num Classes: {config['num_classes']}")
-    print(f"  • GNN Layers: {config['num_gnn_layers']}")
-    print(f"  • Attention Heads: {config['num_attention_heads']}")
-    print(f"  • Attention Pooling: {config['use_attention_pooling']}")
-    print(f"  • Dropout: {config['dropout']}")
+    print(f"  Feature Dim: {config['feature_dim']}")
+    print(f"  Hidden Dim: {config['hidden_dim']}")
+    print(f"  Edge Dim: {config['edge_dim']}")
+    print(f"  Num Classes: {config['num_classes']}")
+    print(f"  GNN Layers: {config['num_gnn_layers']}")
+    print(f"  Attention Heads: {config['num_attention_heads']}")
+    print(f"  Attention Pooling: {config['use_attention_pooling']}")
+    print(f"  Dropout: {config['dropout']}")
     
     print(f"\n  Regularization:")
-    print(f"  • Mode: {config['reg_mode']}")
-    print(f"  • L0 Method: {config['l0_method']}")
-    print(f"  • Optimization: {'CONSTRAINED' if config['use_constrained'] else 'PENALTY'}")
-    if config['use_constrained']:
-        print(f"  • Constraint Target: {config['constraint_target']*100:.1f}%")
-    else:
-        print(f"  • Lambda Reg: {config['lambda_reg']}")
+    print(f"  Mode: {config['reg_mode']}")
+    print(f"  L0 Method: {config['l0_method']}")
+    print(f"  Lambda Reg: {config['lambda_reg']}")
     
     print(f"{'='*70}\n")
     
     return config
 
-
-# ============================================================================
-# TOP-K EDGE SELECTION
-# ============================================================================
 
 def keep_top_k_edges(edge_weights, adj_matrix, ratio=0.30):
     """
@@ -205,30 +176,18 @@ def keep_top_k_edges(edge_weights, adj_matrix, ratio=0.30):
         if weights_b.numel() == 0:
             continue
         
-        # Calculate number of edges to keep
         k = max(1, int(weights_b.numel() * ratio))
-        
-        # Get threshold for top k edges
         threshold = torch.topk(weights_b, k)[0][-1].item()
-        
-        # Keep edges >= threshold
         result[b] = (edge_weights[b] >= threshold).float() * edge_mask[b]
     
     return result
 
 
-# ============================================================================
-# BOOTSTRAP ANALYSIS
-# ============================================================================
-
 def bootstrap_roc_pr_analysis(y_true, y_score_probs, n_bootstrap=10000, confidence_level=0.95):
-    """
-    Compute bootstrap confidence intervals for ROC AUC, PR AUC, and curves
-    """
+    """Compute bootstrap confidence intervals for ROC AUC, PR AUC, and curves"""
     n_classes = y_score_probs.shape[1]
     n_samples = len(y_true)
     
-    # Convert one-hot to class labels if needed
     if len(y_true.shape) > 1 and y_true.shape[1] > 1:
         y_true_labels = np.argmax(y_true, axis=1)
     else:
@@ -351,10 +310,6 @@ def bootstrap_roc_pr_analysis(y_true, y_score_probs, n_bootstrap=10000, confiden
     return results
 
 
-# ============================================================================
-# VISUALIZATION
-# ============================================================================
-
 def plot_roc_pr_curves(results, n_classes, output_path, class_names=None):
     """Plot ROC and PR curves with confidence bands"""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
@@ -372,7 +327,7 @@ def plot_roc_pr_curves(results, n_classes, output_path, class_names=None):
             
             ax1.plot(res['fpr_grid'], res['tpr_mean'], 
                     color=colors[i], linewidth=2,
-                    label=f'{class_names[i]} (AUC={res["roc_auc_mean"]:.3f}±{res["roc_auc_std"]:.3f})')
+                    label=f'{class_names[i]} (AUC={res["roc_auc_mean"]:.3f}+/-{res["roc_auc_std"]:.3f})')
             
             ax1.fill_between(res['fpr_grid'], 
                            res['tpr_ci_low'], res['tpr_ci_high'],
@@ -395,7 +350,7 @@ def plot_roc_pr_curves(results, n_classes, output_path, class_names=None):
             
             ax2.plot(res['recall_grid'], res['precision_mean'], 
                     color=colors[i], linewidth=2,
-                    label=f'{class_names[i]} (AP={res["pr_auc_mean"]:.3f}±{res["pr_auc_std"]:.3f})')
+                    label=f'{class_names[i]} (AP={res["pr_auc_mean"]:.3f}+/-{res["pr_auc_std"]:.3f})')
             
             ax2.fill_between(res['recall_grid'], 
                            res['precision_ci_low'], res['precision_ci_high'],
@@ -412,7 +367,7 @@ def plot_roc_pr_curves(results, n_classes, output_path, class_names=None):
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"✓ Saved: {output_path}")
+    print(f"Saved: {output_path}")
 
 
 def plot_confusion_matrix(cm, class_names, output_path):
@@ -430,7 +385,7 @@ def plot_confusion_matrix(cm, class_names, output_path):
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"✓ Saved: {output_path}")
+    print(f"Saved: {output_path}")
 
 
 def plot_edge_sparsity(edge_densities, edge_weights_all, output_path):
@@ -460,12 +415,8 @@ def plot_edge_sparsity(edge_densities, edge_weights_all, output_path):
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"✓ Saved: {output_path}")
+    print(f"Saved: {output_path}")
 
-
-# ============================================================================
-# METRICS COMPUTATION
-# ============================================================================
 
 def calculate_metrics(y_true, y_pred_probs):
     """Calculate comprehensive classification metrics"""
@@ -500,9 +451,9 @@ def analyze_edge_sparsity(model, test_loader, device, config, output_dir, use_to
     edge_weights_all = []
     num_nodes_list = []
     
-    print(f"\n📊 Analyzing edge sparsity...")
+    print(f"\nAnalyzing edge sparsity...")
     if use_top_k:
-        print(f"   Using TOP-{top_k_ratio*100:.0f}% edge selection")
+        print(f"  Using TOP-{top_k_ratio*100:.0f}% edge selection")
     
     with torch.no_grad():
         for sample in tqdm(test_loader, desc="Processing"):
@@ -563,10 +514,6 @@ def analyze_edge_sparsity(model, test_loader, device, config, output_dir, use_to
     return stats
 
 
-# ============================================================================
-# MAIN TESTING FUNCTION
-# ============================================================================
-
 def test_lens2_model(args):
     """Main testing function"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -574,7 +521,7 @@ def test_lens2_model(args):
     os.makedirs(args.output_dir, exist_ok=True)
     
     print(f"\n{'='*70}")
-    print(f"🧪 LENS2 MODEL TESTING - AUTO-CONFIGURATION")
+    print(f"LENS2 MODEL TESTING - AUTO-CONFIGURATION")
     print(f"{'='*70}")
     print(f"  Device: {device}")
     print(f"  Test Data: {args.test_data}")
@@ -585,17 +532,17 @@ def test_lens2_model(args):
     config = extract_config_from_checkpoint(args.model_path, device)
     
     # Load test data
-    print("📂 Loading test dataset...")
+    print("Loading test dataset...")
     with open(args.test_data, 'r') as f:
         test_ids = f.readlines()
     
     test_dataset = GraphDataset(root=args.data_root, ids=test_ids)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, collate_fn=collate)
     
-    print(f"   ✓ Loaded {len(test_dataset)} test samples\n")
+    print(f"  Loaded {len(test_dataset)} test samples\n")
     
     # Create model
-    print("🔧 Loading model...")
+    print("Loading model...")
     model = ImprovedEdgeGNN(
         feature_dim=config['feature_dim'],
         hidden_dim=config['hidden_dim'],
@@ -606,8 +553,6 @@ def test_lens2_model(args):
         lambda_reg=config['lambda_reg'],
         reg_mode=config['reg_mode'],
         l0_method=config['l0_method'],
-        use_constrained=config['use_constrained'],
-        constraint_target=config['constraint_target'],
         edge_dim=config['edge_dim'],
         dropout=config['dropout'],
         warmup_epochs=config['warmup_epochs'],
@@ -620,7 +565,7 @@ def test_lens2_model(args):
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
-    print(f"   ✓ Model loaded successfully\n")
+    print(f"  Model loaded successfully\n")
     
     # Collect predictions
     evaluator = Evaluator(n_class=config['num_classes'])
@@ -629,9 +574,9 @@ def test_lens2_model(args):
     all_labels = []
     all_probabilities = []
     
-    print("🔍 Collecting predictions...")
+    print("Collecting predictions...")
     if args.use_top_k:
-        print(f"   Using TOP-{args.top_k_ratio*100:.0f}% edge selection")
+        print(f"  Using TOP-{args.top_k_ratio*100:.0f}% edge selection")
     
     # Monkey-patch for top-k if enabled
     if args.use_top_k:
@@ -662,20 +607,20 @@ def test_lens2_model(args):
     all_labels = np.array(all_labels)
     all_probabilities = np.array(all_probabilities)
     
-    print(f"   ✓ Collected {len(all_labels)} predictions\n")
+    print(f"  Collected {len(all_labels)} predictions\n")
     
     # Calculate metrics
-    print("📊 Calculating metrics...")
+    print("Calculating metrics...")
     metrics = calculate_metrics(all_labels, all_probabilities)
     
-    print(f"\n   Overall Performance:")
-    print(f"   • Accuracy: {metrics['accuracy']:.4f}")
-    print(f"   • Macro F1: {metrics['f1_macro']:.4f}")
-    print(f"   • Weighted F1: {metrics['f1_weighted']:.4f}\n")
+    print(f"\n  Overall Performance:")
+    print(f"  Accuracy: {metrics['accuracy']:.4f}")
+    print(f"  Macro F1: {metrics['f1_macro']:.4f}")
+    print(f"  Weighted F1: {metrics['f1_weighted']:.4f}\n")
     
     # Bootstrap analysis
     if args.n_bootstrap > 0:
-        print(f"🔄 Running bootstrap analysis ({args.n_bootstrap} iterations)...")
+        print(f"Running bootstrap analysis ({args.n_bootstrap} iterations)...")
         bootstrap_results = bootstrap_roc_pr_analysis(
             all_labels, 
             all_probabilities, 
@@ -684,7 +629,7 @@ def test_lens2_model(args):
         )
     else:
         bootstrap_results = None
-        print("⏭️  Skipping bootstrap analysis\n")
+        print("Skipping bootstrap analysis\n")
     
     # Edge sparsity analysis
     if args.analyze_sparsity:
@@ -694,10 +639,10 @@ def test_lens2_model(args):
         )
     else:
         sparsity_stats = None
-        print("⏭️  Skipping sparsity analysis\n")
+        print("Skipping sparsity analysis\n")
     
     # Generate plots
-    print("📈 Generating visualizations...")
+    print("Generating visualizations...")
     
     class_names = args.class_names.split(',') if args.class_names else [f'Class {i}' for i in range(config['num_classes'])]
     
@@ -716,7 +661,7 @@ def test_lens2_model(args):
     )
     
     # Save results
-    print("\n💾 Saving results...")
+    print("\nSaving results...")
     
     results_file = os.path.join(args.output_dir, 'test_results.txt')
     with open(results_file, 'w') as f:
@@ -761,9 +706,9 @@ def test_lens2_model(args):
                 if class_key in bootstrap_results:
                     res = bootstrap_results[class_key]
                     f.write(f"\n{class_names[i]}:\n")
-                    f.write(f"  ROC AUC: {res['roc_auc_mean']:.4f} ± {res['roc_auc_std']:.4f}\n")
+                    f.write(f"  ROC AUC: {res['roc_auc_mean']:.4f} +/- {res['roc_auc_std']:.4f}\n")
                     f.write(f"  ROC CI: [{res['roc_auc_ci_low']:.4f}, {res['roc_auc_ci_high']:.4f}]\n")
-                    f.write(f"  PR AUC: {res['pr_auc_mean']:.4f} ± {res['pr_auc_std']:.4f}\n")
+                    f.write(f"  PR AUC: {res['pr_auc_mean']:.4f} +/- {res['pr_auc_std']:.4f}\n")
                     f.write(f"  PR CI: [{res['pr_auc_ci_low']:.4f}, {res['pr_auc_ci_high']:.4f}]\n")
                     f.write(f"  Precision: {metrics['precision_per_class'][i]:.4f}\n")
                     f.write(f"  Recall: {metrics['recall_per_class'][i]:.4f}\n")
@@ -772,15 +717,15 @@ def test_lens2_model(args):
             if 'macro' in bootstrap_results:
                 res = bootstrap_results['macro']
                 f.write("\nMacro Average:\n")
-                f.write(f"  ROC AUC: {res['roc_auc_mean']:.4f} ± {res['roc_auc_std']:.4f}\n")
+                f.write(f"  ROC AUC: {res['roc_auc_mean']:.4f} +/- {res['roc_auc_std']:.4f}\n")
                 f.write(f"  ROC CI: [{res['roc_auc_ci_low']:.4f}, {res['roc_auc_ci_high']:.4f}]\n")
-                f.write(f"  PR AUC: {res['pr_auc_mean']:.4f} ± {res['pr_auc_std']:.4f}\n")
+                f.write(f"  PR AUC: {res['pr_auc_mean']:.4f} +/- {res['pr_auc_std']:.4f}\n")
                 f.write(f"  PR CI: [{res['pr_auc_ci_low']:.4f}, {res['pr_auc_ci_high']:.4f}]\n")
         
         if sparsity_stats:
             f.write("\nEdge Sparsity Analysis:\n")
             f.write("-"*40 + "\n")
-            f.write(f"Mean Density: {sparsity_stats['mean_density']:.4f} ± {sparsity_stats['std_density']:.4f}\n")
+            f.write(f"Mean Density: {sparsity_stats['mean_density']:.4f} +/- {sparsity_stats['std_density']:.4f}\n")
             f.write(f"Density Range: [{sparsity_stats['min_density']:.4f}, {sparsity_stats['max_density']:.4f}]\n")
             f.write(f"Mean Edge Weight: {sparsity_stats['mean_edge_weight']:.4f}\n")
             f.write(f"Std Edge Weight: {sparsity_stats['std_edge_weight']:.4f}\n")
@@ -821,24 +766,20 @@ def test_lens2_model(args):
     with open(os.path.join(args.output_dir, 'results.json'), 'w') as f:
         json.dump(json_results, f, indent=2)
     
-    print(f"\n✓ Results saved to: {args.output_dir}")
-    print(f"   • test_results.txt")
-    print(f"   • results.json")
-    print(f"   • roc_pr_curves.png")
-    print(f"   • confusion_matrix.png")
+    print(f"\nResults saved to: {args.output_dir}")
+    print(f"  - test_results.txt")
+    print(f"  - results.json")
+    print(f"  - roc_pr_curves.png")
+    print(f"  - confusion_matrix.png")
     if sparsity_stats:
-        print(f"   • edge_sparsity_analysis.png")
+        print(f"  - edge_sparsity_analysis.png")
     
     print(f"\n{'='*70}")
-    print(f"✅ TESTING COMPLETE")
+    print(f"TESTING COMPLETE")
     print(f"{'='*70}\n")
     
     return metrics, bootstrap_results, sparsity_stats, config
 
-
-# ============================================================================
-# MAIN
-# ============================================================================
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Test LENS2 Model - Auto-Configuration')
@@ -847,7 +788,7 @@ if __name__ == "__main__":
     parser.add_argument('--model-path', type=str, required=True, 
                        help='Path to model checkpoint')
     parser.add_argument('--test-data', type=str, required=True, 
-                       help='Path to test data file (list of IDs)')
+                       help='Path to test data file')
     parser.add_argument('--data-root', type=str, required=True, 
                        help='Root directory for dataset')
     
