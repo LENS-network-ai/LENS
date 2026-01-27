@@ -138,7 +138,7 @@ def main():
     }, final_model_path)
     
     print("\n" + "="*60)
-    print("🏆 TRAINING COMPLETE")
+    print(" TRAINING COMPLETE")
     print("="*60)
     print(f"Best Validation Accuracy: {results['best_val_acc']:.4f} (Epoch {results['best_epoch']})")
     print(f"Model saved to: {final_model_path}")
@@ -149,7 +149,7 @@ def main():
         model.plot_stats(save_path=plot_path)
         print(f"Edge weight evolution plot saved to: {plot_path}")
     
-    print(f"\n📊 Detailed analysis and reports can be found in:")
+    print(f"\n Detailed analysis and reports can be found in:")
     print(f"   {output_dir}")
 
 if __name__ == "__main__":
