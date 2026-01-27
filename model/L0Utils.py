@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import numpy as np
-# at the top of your file
-from builtins import int as int_builtin
-import math
+
+
 class L0RegularizerParams:
-    """Class to hold configurable parameters for L0 regularization"""
+    """Parameters for L0 regularization with Hard-Concrete distribution"""
+    
     def __init__(self, gamma=-0.1, zeta=1.1, beta_l0=0.66, eps=1e-20):
         self.sig = nn.Sigmoid()
         self.gamma = gamma
@@ -30,45 +29,49 @@ class L0RegularizerParams:
         self._update_const1()
         return self
 
-# Create a global default instance
+
+# Default instance
 l0_params = L0RegularizerParams()
 
+
 def l0_train(logAlpha, min=0, max=1, params=None, temperature=None):
-    """L0 regularization function for training - uses stochastic gates"""
+    """L0 regularization for training - stochastic gates"""
     if params is None:
         params = l0_params
-    # Use temperature if provided, else use beta_l0
-    effective_beta = temperature if temperature is not None else params.beta_l0
     
-
+    effective_beta = temperature if temperature is not None else params.beta_l0
     
     U = torch.rand(logAlpha.size()).type_as(logAlpha) + params.eps
     s = params.sig((torch.log(U / (1 - U)) + logAlpha) / effective_beta)
     s_bar = s * (params.zeta - params.gamma) + params.gamma
     mask = torch.clamp(s_bar, min, max)
+    
     return mask
+
 
 def l0_test(logAlpha, min=0, max=1, params=None, temperature=None):
-    """L0 regularization function for testing - deterministic version"""
+    """L0 regularization for testing - deterministic"""
     if params is None:
         params = l0_params
+    
     effective_beta = temperature if temperature is not None else params.beta_l0
-    #  effective_beta= 1.0
-    print(f"🔍 l0_test DEBUG: temperature={temperature}, effective_beta={effective_beta}, params.beta_l0={params.beta_l0}")
-
-    s = params.sig(logAlpha/effective_beta)
+    
+    s = params.sig(logAlpha / effective_beta)
     s_bar = s * (params.zeta - params.gamma) + params.gamma
     mask = torch.clamp(s_bar, min, max)
+    
     return mask
 
+
 def get_loss2(logAlpha, params=None):
-    """Calculate the L0 regularization penalty"""
+    """Calculate L0 regularization penalty"""
     if params is None:
         params = l0_params
     
     return params.sig(logAlpha - params.const1)
 
-# For backward compatibility - exported constants with original default values
+
+# Backward compatibility
 gamma = l0_params.gamma
 zeta = l0_params.zeta
 beta_l0 = l0_params.beta_l0
