@@ -25,9 +25,21 @@ pip install -r requirements.txt
 ```
 
 ### Dataset Information
-Our experiments use the **CPTAC** (Clinical Proteomic Tumor Analysis Consortium) dataset, which is publicly available through the National Cancer Institute.
-Visit: https://www.cancerimagingarchive.net/
-You find the IDs used in this study in CPTAC_IDs.txt
+## Dataset Information
+
+The **CPTAC (Clinical Proteomic Tumor Analysis Consortium)** dataset serves as the main benchmark in this work. CPTAC data are publicly available from the U.S. National Cancer Institute via The Cancer Imaging Archive (TCIA):
+
+https://www.cancerimagingarchive.net/
+
+The CPTAC sample IDs used in our experiments are provided in `CPTAC_IDs.txt`.
+
+To assess the generalizability of our approach, we additionally evaluate on multiple **TCGA** cohorts:
+- TCGA-BRCA
+- TCGA-RCC
+- TCGA Lung Cancer (LUAD and LUSC)
+
+TCGA data are obtained from the Genomic Data Commons (GDC) portal : https://portal.gdc.cancer.gov/.
+
 
 ### Step 1: WSI Tiling
 ```bash
