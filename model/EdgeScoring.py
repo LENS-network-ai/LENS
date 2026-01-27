@@ -1,7 +1,7 @@
 # model/EdgeScoring.py
 """
-Edge Scoring Network with support for Hard-Concrete, ARM, and STE
-Works with DENSE adjacency matrices
+Edge Scoring Network with Hard-Concrete, ARM, and STE
+Works with dense adjacency matrices
 """
 
 import torch
@@ -15,7 +15,7 @@ from model.L0Utils_ARM import arm_sample_gates, ARML0RegularizerParams
 
 class EdgeScoringNetwork(nn.Module):
     """
-    Edge Scoring Network that computes importance scores for edges
+    Edge Scoring Network - computes importance scores for edges
     Supports Hard-Concrete, ARM, and STE L0 regularization
     """
     
@@ -37,10 +37,17 @@ class EdgeScoringNetwork(nn.Module):
         self.l0_params = l0_params
         self.l0_method = l0_method
         
-        # Edge scoring MLP
-        # Input: [src_feat || tgt_feat || distance] = 2*feature_dim + 1
+        # Feature attention layer
+        self.feature_attention = nn.Sequential(
+            nn.Linear(feature_dim * 2, feature_dim),
+            nn.ReLU(),
+            nn.Linear(feature_dim, feature_dim),
+            nn.Softmax(dim=1)
+        )
+        
+        # Edge scoring MLP: [src_feat || tgt_feat || attended_diff]
         self.edge_mlp = nn.Sequential(
-            spectral_norm(nn.Linear(feature_dim * 2 + 1, edge_dim)),
+            spectral_norm(nn.Linear(feature_dim * 2 + feature_dim, edge_dim)),
             nn.ReLU(),
             nn.Dropout(dropout),
             spectral_norm(nn.Linear(edge_dim, edge_dim)),
@@ -49,31 +56,24 @@ class EdgeScoringNetwork(nn.Module):
             spectral_norm(nn.Linear(edge_dim, 1))
         )
         
-        # Initialize with Kaiming
+        # Kaiming initialization
         for m in self.edge_mlp:
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
         
-        # ============================================================
-        # CRITICAL FIX: Positive bias initialization for logAlpha
-        # ============================================================
-        # Get final layer (unwrap spectral_norm if needed)
+        # Positive bias for final layer → gates start open
         final_module = self.edge_mlp[-1]
         final_layer = final_module.module if hasattr(final_module, 'module') else final_module
-
-        # Set positive bias → logAlpha starts positive → gates start open
         nn.init.constant_(final_layer.bias, 1.0)
         nn.init.xavier_uniform_(final_layer.weight, gain=0.1)
-
-        print("[EdgeScoring] ✅ Initialized with positive bias (gates start ~73% open)")
-        # ============================================================
         
         # Store last logAlpha for ARM gradient computation
         self.last_logAlpha = None
         
         print(f"[EdgeScoring] Initialized: method={l0_method}, feature_dim={feature_dim}, edge_dim={edge_dim}")
+    
     def compute_edge_weights(
         self, node_feat, adj_matrix,
         current_epoch=0, warmup_epochs=5, temperature=None,
@@ -82,22 +82,22 @@ class EdgeScoringNetwork(nn.Module):
         l0_params=None, training=True
     ):
         """
-        Compute edge weights using selected L0 method for sparse graphs.
-    
+        Compute edge weights using L0 method for sparse graphs
+        
         Args:
             node_feat: Node features [B, N, D]
             adj_matrix: Dense adjacency matrix [B, N, N]
             current_epoch: Current training epoch
             warmup_epochs: Number of warmup epochs
             temperature: Temperature for Gumbel-Softmax
-            graph_size_adaptation: Whether to adapt to graph size
+            graph_size_adaptation: Adapt to graph size
             min_edges_per_node: Minimum edges per node
-            regularizer: EGLassoRegularization instance
+            regularizer: L0Regularization instance
             use_l0: Whether using L0 regularization
-            print_stats: Whether to print statistics
-            l0_params: L0 parameters (overrides self.l0_params)
-            training: Whether in training mode
-    
+            print_stats: Print statistics
+            l0_params: L0 parameters
+            training: Training mode
+        
         Returns:
             edge_weights_dense: Dense edge weights [B, N, N]
             logAlpha_dense: Dense logits [B, N, N]
@@ -105,76 +105,64 @@ class EdgeScoringNetwork(nn.Module):
         batch_size, num_nodes, feat_dim = node_feat.shape
         device = node_feat.device
         params = l0_params if l0_params is not None else self.l0_params
-    
-        # Ensure adjacency is dense
+        
+        # Ensure dense adjacency
         if adj_matrix.is_sparse:
             adj_matrix = adj_matrix.to_dense()
-    
-        # -------------------------
+        
         # Build sparse edge index
-        # -------------------------
         edge_index_list = []
         for b in range(batch_size):
-            edges_b = (adj_matrix[b] > 0).nonzero(as_tuple=False)  # [E_b, 2]
+            edges_b = (adj_matrix[b] > 0).nonzero(as_tuple=False)
             if edges_b.numel() == 0:
                 continue
             batch_col = torch.full((edges_b.size(0), 1), b, device=device)
-            edge_index_list.append(torch.cat([batch_col, edges_b], dim=1))  # [E_b, 3]
-    
+            edge_index_list.append(torch.cat([batch_col, edges_b], dim=1))
+        
         if len(edge_index_list) == 0:
-            # No edges in batch
             return torch.zeros_like(adj_matrix), torch.zeros_like(adj_matrix)
-    
-        edge_index = torch.cat(edge_index_list, dim=0)  # [E_total, 3]
+        
+        edge_index = torch.cat(edge_index_list, dim=0)
         batch_ids, src_nodes, tgt_nodes = edge_index[:, 0], edge_index[:, 1], edge_index[:, 2]
-    
-        # -------------------------
+        
         # Gather node features
-        # -------------------------
-        src_feat = node_feat[batch_ids, src_nodes]  # [E_total, D]
-        tgt_feat = node_feat[batch_ids, tgt_nodes]  # [E_total, D]
-    
-        distances = torch.norm(src_feat - tgt_feat, dim=-1, keepdim=True)  # [E_total, 1]
-        edge_features = torch.cat([src_feat, tgt_feat, distances], dim=-1)  # [E_total, 2*D+1]
-    
-        # -------------------------
+        src_feat = node_feat[batch_ids, src_nodes]
+        tgt_feat = node_feat[batch_ids, tgt_nodes]
+        
+        # Normalize features
+        src_feat = F.normalize(src_feat, p=2, dim=1)
+        tgt_feat = F.normalize(tgt_feat, p=2, dim=1)
+        
+        # Compute feature differences
+        feat_diff = torch.abs(src_feat - tgt_feat)
+        
+        # Apply feature attention
+        edge_feats_raw = torch.cat([src_feat, tgt_feat], dim=1)
+        attention_weights = self.feature_attention(edge_feats_raw)
+        attended_diff = feat_diff * attention_weights
+        
+        # Final edge features: [src || tgt || attended_diff]
+        edge_features = torch.cat([src_feat, tgt_feat, attended_diff], dim=-1)
+        
         # Compute edge logits
-        # -------------------------
-        logAlpha = self.edge_mlp(edge_features).squeeze(-1)  # [E_total]
-        #logAlpha = torch.clamp(logAlpha, min=-5.0, max=5.0)
-        # self.last_logAlpha = logAlpha
-        # print(f"\n🔍 DEBUG L0 Gating:")
-        # print(f"  logAlpha: min={logAlpha.min():.4f}, max={logAlpha.max():.4f}, mean={logAlpha.mean():.4f}")
-        # print(f"  temperature: {temperature}")
-        # print(f"  training: {training}")    
-        # Debug check
-        #  if not hasattr(self, '_checked'):
-        mean_val = logAlpha.mean()
-        print(f"🔍 LogAlpha mean: {mean_val:.4f} {'✅ POSITIVE' if mean_val > 0 else '⚠️ NEGATIVE'}")
-         #   self._checked = True
-    
-        # -------------------------
+        logAlpha = self.edge_mlp(edge_features).squeeze(-1)
+        self.last_logAlpha = logAlpha
+        
         # Store logits in regularizer
-        # -------------------------
         if use_l0 and regularizer is not None:
             regularizer.clear_logits()
             for b in range(batch_size):
                 mask_b = batch_ids == b
                 regularizer.store_logits(b, logAlpha[mask_b])
-    
-        # -------------------------
+        
         # Apply L0 gating
-        # -------------------------
         if use_l0 and params is not None:
             if self.l0_method == 'hard-concrete':
                 edge_weights = l0_train(logAlpha, params=params, temperature=temperature) if training else l0_test(logAlpha, params=params, temperature=temperature)
-                print(f"  After L0: min={edge_weights.min():.4f}, max={edge_weights.max():.4f}, mean={edge_weights.mean():.4f}")
-
+            
             elif self.l0_method == 'arm':
                 edge_weights, edge_weights_anti = arm_sample_gates(logAlpha, params, training=training)
-                if training and edge_weights_anti is not None:
-                    # Optional: scatter anti edges too
-                    pass
+            
             elif self.l0_method == 'ste':
                 from model.L0Utils_STE import ste_sample_gates
                 if training:
@@ -184,19 +172,17 @@ class EdgeScoringNetwork(nn.Module):
                     edge_weights = (probs > 0.5).float()
             else:
                 raise ValueError(f"Unknown l0_method: {self.l0_method}")
-    
+            
             if print_stats:
                 active_edges = (edge_weights > 0.5).float().sum().item()
                 print(f"   [EdgeScoring-{self.l0_method.upper()}] Active edges: {active_edges}/{edge_features.size(0)} "
                       f"({100*active_edges/max(edge_features.size(0),1):.1f}%)")
-    
-        # -------------------------
+        
         # Scatter edge weights and logits back to dense [B, N, N]
-        # -------------------------
         edge_weights_dense = torch.zeros((batch_size, num_nodes, num_nodes), device=device)
         logAlpha_dense = torch.zeros((batch_size, num_nodes, num_nodes), device=device)
-    
+        
         edge_weights_dense[batch_ids, src_nodes, tgt_nodes] = edge_weights
         logAlpha_dense[batch_ids, src_nodes, tgt_nodes] = logAlpha
-    
+        
         return edge_weights_dense, logAlpha_dense
