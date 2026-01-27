@@ -78,9 +78,107 @@ In our work we have mainly used the pretrained feature extractor from GTP work: 
     └── test_list.txt              # Test samples 30 %(CPTAC IDs)
 ```
 ### Step 3: Model Training
+There are two ways to run LENS model:
+
+1. **Standard Training**: Train the model with fixed hyperparameters
+2. **Bayesian Optimization**: Automatically find optimal hyperparameters based on validation accuracy and sparsity
+
+### Standard Training
+
+To run standard training with cross-validation:
+
+```bash
+python main.py \
+  --data-root /path/to/data \
+  --train-list /path/to/train_list.txt \
+  --batch-size 1 \
+  --epochs 80 \
+  --lambda-reg 0.00001 \
+  --reg-mode l0 \
+  --warmup-epochs 60 \
+  --min-edges-per-node 2
+```
+
+#### Key Parameters
+
+- `--data-root`: Directory containing the graph data
+- `--train-list`: File with list of training examples
+- `--lambda-reg`: Regularization strength (λ) controlling sparsity (lower = less pruning)
+- `--reg-mode`: Regularization type (`l0` or `egl`)
+- `--warmup-epochs`: Number of epochs with gradually increasing regularization
+- `--min-edges-per-node`: Minimum edges to maintain per node
+
+#### L0 Specific Parameters
+
+When using L0 regularization, you can customize the following:
+
+```bash
+python main.py \
+  --data-root /path/to/data \
+  --train-list /path/to/train_list.txt \
+  --reg-mode l0 \
+  --lambda-reg 0.00001 \
+  --l0-gamma -0.1 \
+  --l0-zeta 1.1 \
+  --l0-beta 0.66 \
+  --initial-temp 5.0
+```
+
+- `--l0-gamma`: Lower bound of hard sigmoid (default: -0.1)
+- `--l0-zeta`: Upper bound of hard sigmoid (default: 1.1)
+- `--l0-beta`: Temperature parameter for L0 regularization (default: 0.66)
+- `--initial-temp`: Initial temperature for edge gating (default: 5.0)
+
+### Bayesian Optimization
+
+To automatically find optimal parameters balancing accuracy and sparsity:
+
+```bash
+python main.py \
+  --data-root /path/to/data \
+  --train-list /path/to/train_list.txt \
+  --batch-size 1 \
+  --epochs 80 \
+  --run-bayesian-opt \
+  --n-trials 30 \
+  --target-sparsity 0.7 \
+  --sparsity-penalty 5.0
+```
+
+#### Optimization Parameters
+
+- `--run-bayesian-opt`: Flag to activate Bayesian optimization
+- `--n-trials`: Number of optimization trials to run (default: 50)
+- `--target-sparsity`: Target sparsity rate to aim for (0.0-1.0)
+- `--sparsity-penalty`: Weight for sparsity deviation penalty (higher = stricter adherence to target)
+
 
 ### Step 4: Testing
 
+
+The testing script evaluates trained models with bootstrap statistical analysis, providing confidence intervals for ROC/PR curves and saving weighted adjacency matrices for visualization.
+
+### Usage
+
+    python Test.py \
+      --model-path /path/to/pretrained/model.pt \
+      --test-data /path/to/test/data.txt \
+      --data-root /path/to/graph/data \
+      --lambda-reg 0.000182 \
+      --reg-mode l0 \
+      --l0-gamma -0.12 \
+      --l0-zeta 1.09 \
+      --l0-beta 0.72 \
+      --n-bootstrap 10000 \
+      --output-dir test_results
+
+### Key Parameters
+
+- `--model-path`: Path to trained model checkpoint
+- `--test-data`: Text file with test sample IDs  
+- `--lambda-reg`: Regularization strength (use optimized value)
+- `--reg-mode`: Regularization type (l0 recommended)
+- `--n-bootstrap`: Bootstrap iterations for confidence intervals (default: 10000)
 
 
 ### Step 5: Visualization
@@ -125,6 +223,8 @@ Edge retention statistics and weight distributions are printed to console and sa
 
 The heatmap uses JET colormap where red indicates high edge connectivity (important regions) and blue indicates low connectivity. This visualization reveals which tissue areas the model considers most important for classification.
 
+
+<img src="https://github.com/user-attachments/assets/eee7e786-9605-4c5a-b032-c5abd81998db" width="400"/>
 
 
 ## 📊 Results
