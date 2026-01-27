@@ -22,11 +22,11 @@ def get_parser():
     parser.add_argument('--edge-dim', type=int, default=128,
                         help='Hidden dimension for edge scoring network')
     
-    # Improved Edge GNN parameters - Lambda/beta regularization
+    # Lambda/beta regularization
     parser.add_argument('--lambda-reg', type=float, default=0.01,
-                        help='Regularization strength (λ) (default: 0.01)')
+                        help='Regularization strength (default: 0.01)')
     parser.add_argument('--beta', type=float, default=0.01,
-                        help='[DEPRECATED] Use --lambda-reg instead. Kept for backward compatibility.')
+                        help='[DEPRECATED] Use --lambda-reg instead')
     
     # Regularization mode
     parser.add_argument('--reg-mode', type=str, default='l0',
@@ -34,21 +34,21 @@ def get_parser():
                         help='Regularization mode (default: l0)')
     parser.add_argument('--egl-mode', type=str, default='l0',
                         choices=['l0', 'none', 'egl', 'l1', 'l2', 'entropy'],
-                        help='[DEPRECATED] Use --reg-mode instead. Kept for backward compatibility.')
+                        help='[DEPRECATED] Use --reg-mode instead')
     
     # Common regularization parameters
     parser.add_argument('--warmup-epochs', type=int, default=5,
-                        help='Number of epochs for warmup (less pruning)')
+                        help='Number of epochs for warmup')
     parser.add_argument('--graph-size-adaptation', action='store_true',
                         help='Enable adaptive pruning based on graph size')
     parser.add_argument('--min-edges-per-node', type=float, default=2.0,
-                        help='Minimum number of edges to keep per node (on average)')
+                        help='Minimum number of edges to keep per node')
     parser.add_argument('--dropout', type=float, default=0.2,
                         help='Dropout rate for edge scoring network')
     parser.add_argument('--weight-decay', type=float, default=5e-4,
                         help='Weight decay for optimizer')
     parser.add_argument('--initial-temp', type=float, default=5.0,
-                        help='Initial temperature for edge gating mechanism')
+                        help='Initial temperature for edge gating')
     
     # L0 regularization specific parameters
     parser.add_argument('--l0-gamma', type=float, default=-0.1,
@@ -58,11 +58,11 @@ def get_parser():
     parser.add_argument('--l0-beta', type=float, default=0.66,
                         help='L0 regularization beta parameter (default: 0.66)')
     
-    # Target sparsity parameters for optimization objective
+    # Target sparsity parameters
     parser.add_argument('--target-sparsity', type=float, default=0.7,
-                        help='Target sparsity rate (0.0-1.0) for optimization')
+                        help='Target sparsity rate (0.0-1.0)')
     parser.add_argument('--sparsity-penalty', type=float, default=5.0,
-                        help='Weight for sparsity deviation penalty in objective function')
+                        help='Weight for sparsity deviation penalty')
     
     # Bayesian optimization parameters
     parser.add_argument('--run-bayesian-opt', action='store_true',
@@ -72,18 +72,17 @@ def get_parser():
     
     # Analysis parameters
     parser.add_argument('--detailed-analysis', action='store_true',
-                        help='Enable more frequent detailed graph analysis (may slow training)')
+                        help='Enable more frequent detailed graph analysis')
     parser.add_argument('--l0_method', type=str, default='hard-concrete',
-                   choices=['hard-concrete', 'arm','ste'])
+                        choices=['hard-concrete', 'arm', 'ste'])
     parser.add_argument('--baseline_ema', type=float, default=0.9)
-      # ============================================
-    # 🆕 TARGET DENSITY CONTROL PARAMETERS
-    # ============================================
+    
+    # Target density control parameters
     parser.add_argument('--target-density', type=float, default=0.30,
-                        help='Target edge retention rate (0.0-1.0) for density control (default: 0.30)')
+                        help='Target edge retention rate (default: 0.30)')
     
     parser.add_argument('--lambda-density', type=float, default=0.03,
-                        help='Density loss weight (λ_ρ) (default: 0.03)')
+                        help='Density loss weight (default: 0.03)')
     
     parser.add_argument('--enable-adaptive-lambda', action='store_true', default=True,
                         help='Enable adaptive lambda mechanism (default: True)')
@@ -99,24 +98,15 @@ def get_parser():
     
     parser.add_argument('--ramp-epochs', type=int, default=20,
                         help='Number of epochs for lambda ramp after warmup (default: 20)')
-    # 🆕 NEW: Constrained optimization arguments
-    parser.add_argument('--use-constrained', action='store_true',
-                    help='Use constrained optimization instead of penalty mode')
-    parser.add_argument('--constraint-target', type=float, default=0.30,
-                    help='Constraint target epsilon (expected L0 density) for constrained mode')
-    parser.add_argument('--dual-lr', type=float, default=1e-3,
-                    help='Learning rate for dual variable (constrained mode)')
-    parser.add_argument('--enable-dual-restarts', action='store_true', default=True,
-                    help='Enable dual restart heuristic (constrained mode)')
-    parser.add_argument('--disable-dual-restarts', action='store_false', dest='enable_dual_restarts',
-                       help='Disable dual restart heuristic')    
+    
+    # Multi-layer GNN and attention pooling
     parser.add_argument('--num-gnn-layers', type=int, default=3,
-                    help='Number of GNN layers (default: 3)')
+                        help='Number of GNN layers (default: 3)')
     parser.add_argument('--num-attention-heads', type=int, default=4,
-                    help='Number of attention heads for pooling (default: 4)')
+                        help='Number of attention heads for pooling (default: 4)')
     parser.add_argument('--use-attention-pooling', action='store_true', default=True,
-                    help='Use multi-head attention pooling (default: True)')
+                        help='Use multi-head attention pooling (default: True)')
     parser.add_argument('--no-attention-pooling', action='store_false', dest='use_attention_pooling',
-                    help='Disable attention pooling, use standard pooling')
+                        help='Disable attention pooling, use standard pooling')
 
     return parser
