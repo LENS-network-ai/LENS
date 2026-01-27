@@ -12,61 +12,12 @@
 
 ##  Pipeline Overview
 
-LENS offers a complete pipeline for histopathology analysis, from whole slide images to interpretable graph-based classification:
-<table align="center">
-<tr>
-<td align="center" width="20%">
 
-<a href="#step-1-wsi-tiling">
-<img width="100"  src="https://github.com/user-attachments/assets/ae412056-6dda-4d9c-9d34-a30e0a2fcafd"/>
-<br/><strong>Step 1</strong><br/>
- <strong>WSI Tiling</strong><br/>
-<em>Partition slides into manageable patches</em>
-</a>
-</td>
-<td align="center" width="20%">
-
-<a href="#step-2-graph-construction">
-<img width="80" src="https://github.com/user-attachments/assets/e4b5f7cf-0efd-4772-8fcb-807b2e923592"/>
-<br/><strong>Step 2</strong><br/>
- <strong>Graph Construction</strong><br/>
-<em>Build spatial relationships between patches</em>
-</a>
-</td>
-<td align="center" width="20%">
-<a href="#step-3-model-training">
-<img width="50" src="https://img.icons8.com/fluency/96/000000/artificial-intelligence.png"/>
-<br/><strong>Step 3</strong><br/>
- <strong>Model Training</strong><br/>
-<em>Learn sparse, interpretable representations</em>
-</a>
-</td>
-
-<td align="center" width="20%">
-<a href="#step-4-testing">
-<img width="50" src="https://github.com/user-attachments/assets/da28dbeb-7fff-4c49-88a0-de8fab04b10c"/>
-<br/><strong>Step 4</strong><br/>
- <strong>Testing</strong><br/>
-<em>Evaluate with bootstrap statistics</em>
-</a>
-
-</td>
-
-<td align="center" width="20%">
-<a href="#step-5-visualization">
-<img width="80" src="https://github.com/user-attachments/assets/8392eb50-bee5-438d-9ab7-6d61e893f142"/>
-<br/><strong>Step 5</strong><br/>
- <strong>Visualization</strong><br/>
-<em>Generate interpretable heatmaps</em>
-</a>
-</td>
-</tr>
-</table>
-## 📦 Installation
+##  Installation
 
 ```bash
 # Clone the repository
-https://github.com/LENS-network-ai/LENS-framework-.git
+git@github.com:LENS-network-ai/LENS.git
 cd LENS
 
 # Install dependencies
