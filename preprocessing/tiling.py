@@ -1,15 +1,9 @@
 '''
-    File name: tile_WSI.py
-    Date created: March/2021
-    Source:
-    Tiling code inspired from
-    https://github.com/openslide/openslide-python/blob/master/examples/deepzoom/deepzoom_tile.py
+   
+    Tiling code inspired from GTP:
+   https://github.com/vkola-lab/tmi2022/blob/main
 
-    The code has been extensively modified 
-    Objective:
-    Tile svs images with the possibility of rejecting some tiles based on xml masks
-    Be careful:
-    Overload of the node - may have memory issue if node is shared with other jobs.
+ 
 '''
 
 from __future__ import print_function
