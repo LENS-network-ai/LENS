@@ -94,7 +94,7 @@ python main.py \
   --batch-size 1 \
   --epochs 80 \
   --lambda-reg 0.00001 \
-  --reg-mode l0 \
+  --reg-mode l0_HC \
   --warmup-epochs 60 \
   --min-edges-per-node 2
 ```
@@ -104,9 +104,9 @@ python main.py \
 - `--data-root`: Directory containing the graph data
 - `--train-list`: File with list of training examples
 - `--lambda-reg`: Regularization strength (λ) controlling sparsity (lower = less pruning)
-- `--reg-mode`: Regularization type (`l0` or `egl`)
+- `--reg-mode`: Regularization type (`l0_HC', 'l0_ARM' , 'l0_STE')
 - `--warmup-epochs`: Number of epochs with gradually increasing regularization
-- `--min-edges-per-node`: Minimum edges to maintain per node
+
 
 #### L0 Specific Parameters
 
@@ -116,7 +116,7 @@ When using L0 regularization, you can customize the following:
 python main.py \
   --data-root /path/to/data \
   --train-list /path/to/train_list.txt \
-  --reg-mode l0 \
+  --reg-mode l0_HC \
   --lambda-reg 0.00001 \
   --l0-gamma -0.1 \
   --l0-zeta 1.1 \
@@ -165,7 +165,7 @@ The testing script evaluates trained models with bootstrap statistical analysis,
       --test-data /path/to/test/data.txt \
       --data-root /path/to/graph/data \
       --lambda-reg 0.000182 \
-      --reg-mode l0 \
+      --reg-mode l0_HC \
       --l0-gamma -0.12 \
       --l0-zeta 1.09 \
       --l0-beta 0.72 \
@@ -177,7 +177,7 @@ The testing script evaluates trained models with bootstrap statistical analysis,
 - `--model-path`: Path to trained model checkpoint
 - `--test-data`: Text file with test sample IDs  
 - `--lambda-reg`: Regularization strength (use optimized value)
-- `--reg-mode`: Regularization type (l0 recommended)
+- `--reg-mode`: Regularization type (l0_HC recommended)
 - `--n-bootstrap`: Bootstrap iterations for confidence intervals (default: 10000)
 
 
