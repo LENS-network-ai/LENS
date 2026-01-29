@@ -9,7 +9,7 @@ import gc
 import wandb
 import numpy as np
 from helper import Trainer, Evaluator, preparefeatureLabel
-from model.EGL_L0_Reg import compute_density
+from model.L0_Reg import compute_density
 
 
 def train_and_evaluate(model, train_loader, val_loader, optimizer, scheduler, device,
