@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import spectral_norm
 
-from model.EGL_L0_Reg import EGLassoRegularization
+from model.L0_Reg import EGLassoRegularization
 from model.EdgeScoring import EdgeScoringNetwork
 from model.GraphPooling import EdgeWeightedAttentionPooling
 from model.StatsTracker import StatsTracker
