@@ -9,7 +9,7 @@ from torch.nn.utils import spectral_norm
 
 from model.multilayerGNN import MultiLayerGNN
 from model.attPooling import MultiHeadAttentionPooling
-from model.EGL_L0_Reg import L0Regularization
+from model.L0_Reg import L0Regularization
 from model.EdgeScoring import EdgeScoringNetwork
 from model.StatsTracker import StatsTracker
 from model.L0Utils import l0_train, l0_test, L0RegularizerParams
