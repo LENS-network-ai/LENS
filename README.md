@@ -239,63 +239,7 @@ Bayesian optimization automatically searches over the following hyperparameters:
 
 **Note**: L0 parameters (gamma=-0.1, zeta=1.1, beta=0.66) use standard values from literature and are not optimized.
 
-### Training Outputs
 
-After training, LENS generates the following outputs in the specified output directory:
-```
-output_dir/
-├── fold1/
-│   ├── final_model.pt                    # Final model checkpoint
-│   ├── phase_models/                     # Best models from each training phase
-│   │   ├── overall_best_model.pth       # Best model across all epochs
-│   │   ├── best_warmup_model.pth        # Best model from warmup phase
-│   │   ├── best_ramp_model.pth          # Best model from ramp phase
-│   │   └── best_plateau_model.pth       # Best model from plateau phase
-│   ├── sparsity_matrices/               # Edge weight matrices
-│   │   ├── overall_best_edge_weights.pt
-│   │   └── ...
-│   ├── training_metrics.png             # Training curves (loss, accuracy)
-│   └── training_results.txt             # Detailed training summary
-├── fold2/
-│   └── ...
-└── cv_summary.txt                        # Cross-validation summary
-```
-
-Each model checkpoint contains:
-- `model_state_dict`: Trained model parameters
-- `optimizer_state_dict`: Optimizer state
-- `epoch`: Training epoch
-- `val_accuracy`: Validation accuracy
-- `current_density`: Achieved edge density
-- `l0_method`: L0 method used
-- `config`: Full training configuration
-
-### Example: Complete Training Pipeline
-```bash
-# Train with Hard-Concrete L0, adaptive density control
-python main.py \
-  --data-root ./data/TCGA-LUNG/simclr_files \
-  --train-list ./data/TCGA-LUNG/train.txt \
-  --output-dir ./results/lens_hc \
-  --n-folds 5 \
-  --batch-size 1 \
-  --epochs 80 \
-  --lr 0.001 \
-  --weight-decay 5e-4 \
-  --reg-mode l0 \
-  --l0-method hard-concrete \
-  --lambda-reg 0.001 \
-  --lambda-density 0.003 \
-  --target-density 0.30 \
-  --enable-adaptive-lambda \
-  --enable-density-loss \
-  --warmup-epochs 15 \
-  --ramp-epochs 20 \
-  --num-gnn-layers 3 \
-  --num-attention-heads 4 \
-  --use-attention-pooling \
-  --dropout 0.2
-```
 
 ### Tips for Hyperparameter Tuning
 
@@ -357,38 +301,6 @@ python test_lens2_auto.py \
 **For Deployment/Comparison (Optional):**
 - `--use-top-k`: Binarize edges using top-k selection (for computational budget evaluation)
 - `--top-k-ratio`: Ratio of top edges to keep when using top-k (default: 0.30)
-
-### Understanding Edge Weights
-
-LENS learns **continuous edge importance scores** in the range [0, 1]:
-```python
-# Hard-Concrete produces graded importance:
-edge_weights = [
-    1.0,    # Critical edge (always kept)
-    0.87,   # Very important (high confidence)
-    0.65,   # Moderately important
-    0.34,   # Low importance
-    0.12,   # Very low importance
-    0.0,    # Pruned edge (always removed)
-]
-```
-
-This enables **interpretable visualizations**:
-- **Red (≈1.0)**: Critical edges that strongly contribute to predictions
-- **Orange/Yellow (0.5-0.9)**: Important edges with graded significance
-- **Light Blue (0.1-0.5)**: Weak connections with low importance
-- **Dark Blue (≈0.0)**: Pruned edges that don't contribute
-
-### Testing Modes
-
-#### 1. Default Mode (Continuous Weights)
-```bash
-python test_lens2_auto.py \
-  --model-path ./results/model.pth \
-  --test-data ./data/test.txt \
-  --data-root ./data/graphs \
-  --analyze-sparsity
-```
 
 **Use this for:**
 - Generating heatmap visualizations showing graded edge importance
