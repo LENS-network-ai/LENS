@@ -264,7 +264,7 @@ The testing script automatically detects all model configurations from the check
 
 ### Basic Usage
 ```bash
-python test_lens2_auto.py \
+python test_lens2.py \
   --model-path /path/to/best_model.pt \
   --test-data /path/to/test_list.txt \
   --data-root /path/to/data \
@@ -318,7 +318,7 @@ Generate heatmaps overlaying learned edge weights on whole slide images (WSIs) t
 
 ### Usage
 
-    python LENS_heatmap.py \
+    python visualize_heatmap.py \
       --wsi-path /path/to/slide.svs \
       --patch-info-path /path/to/c_idx.txt \
       --pruned-adj-path /path/to/pruned_adj.pt \
