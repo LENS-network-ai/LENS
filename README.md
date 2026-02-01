@@ -100,7 +100,7 @@ python main.py \
   --l0-method hard-concrete \
   --warmup-epochs 15 \
   --ramp-epochs 20 \
-  --min-edges-per-node 2
+ 
 ```
 
 #### Key Parameters
@@ -114,7 +114,7 @@ python main.py \
 - `--l0-method`: L0 relaxation method (`hard-concrete`, `arm`, or `ste`)
 - `--warmup-epochs`: Number of epochs for linear warmup (default: 15)
 - `--ramp-epochs`: Number of epochs for linear ramp after warmup (default: 20)
-- `--min-edges-per-node`: Minimum edges to maintain per node (default: 2.0)
+
 
 #### L0 Regularization Methods
 
