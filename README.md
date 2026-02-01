@@ -110,7 +110,7 @@ python main.py \
 - `--lambda-reg`: Base regularization strength (λ₀) for L0 penalty (default: 0.01)
 - `--lambda-density`: Density loss weight (λ_ρ) for target density enforcement (default: 0.03)
 - `--target-density`: Target edge retention rate (0.0-1.0, default: 0.30 = keep 30% of edges)
-- `--reg-mode`: Regularization type (`l0`, `egl`, or `none`)
+- `--reg-mode`: Regularization type (`l0`, or `none`)
 - `--l0-method`: L0 relaxation method (`hard-concrete`, `arm`, or `ste`)
 - `--warmup-epochs`: Number of epochs for linear warmup (default: 15)
 - `--ramp-epochs`: Number of epochs for linear ramp after warmup (default: 20)
