@@ -93,7 +93,7 @@ python main.py \
   --train-list /path/to/train_list.txt \
   --batch-size 1 \
   --epochs 80 \
-  --lambda-reg 0.01 \
+  --lambda-reg 0.001 \
   --lambda-density 0.03 \
   --target-density 0.30 \
   --reg-mode l0 \
@@ -136,9 +136,7 @@ python main.py \
 python main.py \
   --reg-mode l0 \
   --l0-method arm \
-  --l0-gamma -0.1 \
-  --l0-zeta 1.1 \
-  --baseline-ema 0.9
+
 ```
 
 **3. STE (Straight-Through Estimator)**
@@ -146,17 +144,15 @@ python main.py \
 python main.py \
   --reg-mode l0 \
   --l0-method ste \
-  --l0-gamma -0.1 \
-  --l0-zeta 1.1
+
 ```
 
 #### L0 Parameters
 
 - `--l0-gamma`: Lower bound of Hard-Concrete distribution (default: -0.1, must be < 0)
 - `--l0-zeta`: Upper bound of Hard-Concrete distribution (default: 1.1, must be > 1)
-- `--l0-beta`: Beta parameter for Hard-Concrete (default: 0.66)
 - `--initial-temp`: Initial temperature for edge gating with cosine annealing (default: 5.0)
-- `--baseline-ema`: EMA coefficient for ARM baseline (default: 0.9, ARM only)
+
 
 #### Adaptive Density Control
 
@@ -205,7 +201,7 @@ LENS uses a three-phase lambda schedule:
 2. **Ramp (epochs T_w to T_w + T_r)**: Linear increase from λ₀ to 2λ₀
 3. **Plateau (epochs > T_w + T_r)**: Constant at 2λ₀
 
-Temperature uses cosine annealing from `initial-temp` to near-zero.
+Temperature uses cosine annealing from `initial-temp` to 0.67.
 
 ### Bayesian Optimization
 
@@ -232,7 +228,7 @@ python main.py \
 The optimization objective is: **O = Acc_val - λ_penalty · |Sparsity - Target|**
 
 Bayesian optimization automatically searches over the following hyperparameters:
-- `lambda_reg`: [0.001, 0.05] - Regularization strength
+- `lambda_reg`: [0.0001, 0.05] - Regularization strength
 - `lambda_density`: [0.01, 0.1] - Density loss weight
 - `target_density`: [0.2, 0.5] - Target edge retention rate
 - `warmup_epochs`: [5, 20] - Warmup duration
@@ -288,8 +284,8 @@ python main.py \
   --weight-decay 5e-4 \
   --reg-mode l0 \
   --l0-method hard-concrete \
-  --lambda-reg 0.01 \
-  --lambda-density 0.03 \
+  --lambda-reg 0.001 \
+  --lambda-density 0.003 \
   --target-density 0.30 \
   --enable-adaptive-lambda \
   --enable-density-loss \
@@ -305,13 +301,13 @@ python main.py \
 
 1. **Start with default parameters** for initial experiments
 2. **Adjust `lambda-reg`** to control overall sparsity level:
-   - Lower values (0.001-0.01) → less aggressive pruning
-   - Higher values (0.05-0.1) → more aggressive pruning
+   - Lower values (0.0001-0.001) → less aggressive pruning
+   - Higher values (0.005-0.01) → more aggressive pruning
 3. **Tune `target-density`** based on your dataset:
    - Dense graphs: 0.20-0.30 (keep 20-30% of edges)
    - Sparse graphs: 0.40-0.50 (keep 40-50% of edges)
 4. **Use `lambda-density`** to enforce target density:
-   - Start with 0.03 and increase if density deviates from target
+   - Start with 0.003 and increase if density deviates from target
 5. **Increase `warmup-epochs`** if training is unstable early on
 6. **Try different L0 methods**:
    - `hard-concrete`: Best for most cases (stable, differentiable)
@@ -320,30 +316,87 @@ python main.py \
 
 ### Step 4: Testing
 
+The testing script automatically detects all model configurations from the checkpoint and evaluates the trained model with bootstrap statistical analysis, providing confidence intervals for ROC/PR curves and comprehensive performance metrics.
 
-The testing script evaluates trained models with bootstrap statistical analysis, providing confidence intervals for ROC/PR curves and saving weighted adjacency matrices for visualization.
+### Basic Usage
+```bash
+python test_lens2_auto.py \
+  --model-path /path/to/best_model.pt \
+  --test-data /path/to/test_list.txt \
+  --data-root /path/to/data \
+  --output-dir test_results
+```
 
-### Usage
-
-    python Test.py \
-      --model-path /path/to/pretrained/model.pt \
-      --test-data /path/to/test/data.txt \
-      --data-root /path/to/graph/data \
-      --lambda-reg 0.000182 \
-      --reg-mode l0_HC \
-      --l0-gamma -0.12 \
-      --l0-zeta 1.09 \
-      --l0-beta 0.72 \
-      --n-bootstrap 10000 \
-      --output-dir test_results
+### Advanced Usage with All Options
+```bash
+python test_lens2_auto.py \
+  --model-path ./results/lens_hc/fold1/phase_models/overall_best_model.pth \
+  --test-data ./data/TCGA-LUNG/test.txt \
+  --data-root ./data/TCGA-LUNG/simclr_files \
+  --output-dir ./test_results \
+  --n-bootstrap 10000 \
+  --confidence-level 0.95 \
+  --analyze-sparsity \
+  --class-names "Normal,LUAD,LUSC"
+```
 
 ### Key Parameters
 
-- `--model-path`: Path to trained model checkpoint
-- `--test-data`: Text file with test sample IDs  
-- `--lambda-reg`: Regularization strength (use optimized value)
-- `--reg-mode`: Regularization type (l0_HC recommended)
-- `--n-bootstrap`: Bootstrap iterations for confidence intervals (default: 10000)
+**Required:**
+- `--model-path`: Path to trained model checkpoint (`.pt` or `.pth` file)
+- `--test-data`: Text file with test sample IDs (format: `filename\tlabel`)
+- `--data-root`: Root directory containing graph data
+
+**Optional:**
+- `--n-bootstrap`: Number of bootstrap iterations for confidence intervals (default: 10000, set to 0 to skip)
+- `--confidence-level`: Confidence level for bootstrap CI (default: 0.95)
+- `--analyze-sparsity`: Flag to perform edge sparsity analysis
+- `--output-dir`: Directory for saving test results (default: `test_results`)
+- `--class-names`: Comma-separated class names for plots (e.g., "Normal,LUAD,LUSC")
+
+**For Deployment/Comparison (Optional):**
+- `--use-top-k`: Binarize edges using top-k selection (for computational budget evaluation)
+- `--top-k-ratio`: Ratio of top edges to keep when using top-k (default: 0.30)
+
+### Understanding Edge Weights
+
+LENS learns **continuous edge importance scores** in the range [0, 1]:
+```python
+# Hard-Concrete produces graded importance:
+edge_weights = [
+    1.0,    # Critical edge (always kept)
+    0.87,   # Very important (high confidence)
+    0.65,   # Moderately important
+    0.34,   # Low importance
+    0.12,   # Very low importance
+    0.0,    # Pruned edge (always removed)
+]
+```
+
+This enables **interpretable visualizations**:
+- **Red (≈1.0)**: Critical edges that strongly contribute to predictions
+- **Orange/Yellow (0.5-0.9)**: Important edges with graded significance
+- **Light Blue (0.1-0.5)**: Weak connections with low importance
+- **Dark Blue (≈0.0)**: Pruned edges that don't contribute
+
+### Testing Modes
+
+#### 1. Default Mode (Continuous Weights)
+```bash
+python test_lens2_auto.py \
+  --model-path ./results/model.pth \
+  --test-data ./data/test.txt \
+  --data-root ./data/graphs \
+  --analyze-sparsity
+```
+
+**Use this for:**
+- Generating heatmap visualizations showing graded edge importance
+- Understanding which edges the model considers most important
+- Creating publication-quality figures with smooth color gradients
+- Interpreting model decisions on individual samples
+
+**Output:** Edge weights preserve their continuous values [0, 1], enabling smooth heatmaps.
 
 
 ### Step 5: Visualization
