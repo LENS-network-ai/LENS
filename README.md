@@ -25,7 +25,7 @@ cd LENS
 pip install -r requirements.txt
 ```
 
-### Dataset Information
+
 ## Dataset Information
 
 The **CPTAC (Clinical Proteomic Tumor Analysis Consortium)** dataset serves as the main benchmark in this work. CPTAC data are publicly available from the U.S. National Cancer Institute via The Cancer Imaging Archive (TCIA):
@@ -40,6 +40,7 @@ To assess the generalizability of our approach, we additionally evaluate on mult
 - TCGA Lung Cancer (LUAD and LUSC)
 
 TCGA data are obtained from the Genomic Data Commons (GDC) portal : https://portal.gdc.cancer.gov/.
+
 ### Feature Extraction
 
 We use **UNI2-h** (Chen et al., 2024), the state-of-the-art pathology foundation model (ViT-H/14, 1536-dim, pretrained on 200M+ H&E and IHC images from 350K+ slides). We leverage the official pre-extracted embeddings released by the Mahmood Lab on HuggingFace at 256x256 / 20x magnification (field standard):
@@ -57,15 +58,9 @@ python convert_uni2_to_lens.py \
 
 This reads h5 files (features + coordinates), builds 8-NN spatial graphs from patch coordinates, and saves `features.pt` (N x 1536) + `adj_s.pt` (sparse adjacency) per slide.
 
-Training with UNI2-h:
-```bash
-python main.py \
-    --data-root /path/to/uni2_graphs \
-    --train-list /path/to/train_list.txt \
-    --n-features 1536
-```
 
-**Alternative encoder:** LENS is encoder-agnostic. We also provide support for SimCLR-ResNet18 (512-dim, 512x512 @ 20x) from [GTP](https://github.com/vkola-lab/tmi2022/tree/main/feature_extractor). Use `--n-features 512` for SimCLR features.
+
+**Alternative encoder:**  We also provide support for SimCLR-ResNet18 (512-dim, 512x512 @ 20x) from [GTP](https://github.com/vkola-lab/tmi2022/tree/main/feature_extractor). Use `--n-features 512` for SimCLR features.
 
 ### Step 1: WSI Tiling
 ```bash
