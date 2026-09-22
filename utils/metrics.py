@@ -3,6 +3,49 @@
 
 import numpy as np
 
+
+def concordance_index(risk_scores, event_times, censorships):
+    """
+    Harrell's concordance index (c-index) for survival prediction.
+
+    A pair (i, j) is "comparable" when the one with the shorter observed
+    time actually had the event (i.e. its time isn't censored). Among
+    comparable pairs, the fraction where the higher risk score corresponds
+    to the shorter survival time is the c-index.
+
+    Args:
+        risk_scores  : [N] higher = higher predicted risk (e.g. sum of hazards,
+                       or -predicted survival time)
+        event_times  : [N] observed time (survival_months, or the discretized bin)
+        censorships  : [N] 1 if censored, 0 if the event was observed
+
+    Returns:
+        float in [0, 1], or 0.5 if there are no comparable pairs.
+    """
+    risk_scores = np.asarray(risk_scores).reshape(-1)
+    event_times = np.asarray(event_times).reshape(-1)
+    censorships = np.asarray(censorships).reshape(-1)
+
+    n = len(risk_scores)
+    if n < 2:
+        return 0.5
+
+    # pair (i, j) is comparable iff i had an observed event and i's time < j's time
+    had_event = (censorships == 0)[:, None]                       # [N, 1]
+    shorter_time = event_times[:, None] < event_times[None, :]    # [N, N]
+    comparable = had_event & shorter_time
+
+    higher_risk = risk_scores[:, None] > risk_scores[None, :]
+    tied_risk = risk_scores[:, None] == risk_scores[None, :]
+
+    num_comparable = comparable.sum()
+    if num_comparable == 0:
+        return 0.5
+
+    num_concordant = (comparable & higher_risk).sum() + 0.5 * (comparable & tied_risk).sum()
+    return float(num_concordant / num_comparable)
+
+
 class ConfusionMatrix(object):
 
     def __init__(self, n_classes):

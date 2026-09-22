@@ -1,0 +1,78 @@
+# WandB sweep: search for lambda-reg / warmup-epochs / ramp-epochs settings
+# that minimize combined_objective = mean_fold(val_loss + val_ambiguity).
+#
+# val_loss is the standard discrete-time survival NLL on each fold's val
+# split; val_ambiguity is mean_{real edges}[gate * (1 - gate)] on the
+# deterministic gate at the restored best-val checkpoint (0 = every edge
+# confidently kept/pruned, ~0.21-0.25 = a uniform "adequate" cluster with no
+# real separation -- see model/LENS_survival.py's ambiguity comment). Summing
+# them means a setting that predicts well but never actually sparsifies
+# (ambiguity stuck near 0.21-0.25) still scores worse than one that predicts
+# comparably well AND separates edges -- without ambiguity dominating val_loss
+# outright, since it's capped at 0.25 against val_loss's typical 0.5-2 range.
+#
+# Both hyperparameters chosen by the user for this sweep:
+#   - lambda-reg: the main L0 penalty strength. Manual testing so far only
+#     covered 0.0001 -> 0.01 (100x) with barely any effect on edge
+#     separation, so this sweep's range goes another 3 orders of magnitude
+#     higher to actually find where (if anywhere) it starts mattering.
+#   - warmup-epochs / ramp-epochs: schedule timing for when lambda/temperature
+#     start and finish ramping. Their sum can exceed --epochs (60) at the
+#     high end of these ranges, in which case the schedule never reaches its
+#     plateau within the run -- deliberately left in-range rather than
+#     capped, since whether that matters is itself worth discovering.
+#
+# Usage:
+#   cd ~/LENS
+#   wandb sweep training/sweep_survival.yaml     # prints a sweep ID
+#   wandb agent --count 20 <entity>/<project>/<sweep_id>
+#
+# Run the agent inside the same conda env + PYTHONPATH used for manual runs
+# (see the srun template used throughout this project), since ${program}
+# below is invoked as a plain python script, not through `python -m`.
+
+program: training/train_survival.py
+method: bayes
+metric:
+  name: combined_objective
+  goal: minimize
+
+parameters:
+  lambda-reg:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 10.0
+  warmup-epochs:
+    distribution: int_uniform
+    min: 5
+    max: 30
+  ramp-epochs:
+    distribution: int_uniform
+    min: 10
+    max: 40
+
+# Fixed (non-swept) args, hardcoded directly in the command rather than as
+# `parameters` with a single `value:` -- keeps the parameters section to only
+# what's actually being searched.
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - "--data-root"
+  - "data/TCGA-BRCA-SURV/simclr_files"
+  - "--train-list"
+  - "data/TCGA-BRCA-SURV/train_list_surv.txt"
+  - "--test-list"
+  - "data/TCGA-BRCA-SURV/test_list_surv.txt"
+  - "--output-dir"
+  - "results/survival_brca_sweep"
+  - "--n-features"
+  - "2048"
+  - "--epochs"
+  - "60"
+  - "--n-folds"
+  - "5"
+  - "--use-wandb"
+  - "--wandb-project"
+  - "lens-survival-brca"
+  - ${args}
