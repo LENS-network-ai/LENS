@@ -1,3 +1,8 @@
+# Third-party baseline, fetched by baselines/setup_graphlsurv_baseline.sh --
+# never vendored into this repo's own history (see that script and
+# baselines/graphlsurv_pytorch_compat.patch).
+baselines/GraphLSurv_original/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
