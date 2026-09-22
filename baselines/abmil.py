@@ -6,7 +6,11 @@ Ilse et al., "Attention-based Deep Multiple Instance Learning", ICML 2018.
 
 Designed to integrate cleanly into the LENS repository:
   - Input : features.pt  ->  Tensor [N x 512]  (ResNet18-SimCLR, same as LENS)
-  - Output: logits, probabilities, predicted class, attention weights [N]
+  - When called with labels (the shared Trainer/train_and_evaluate loop from
+    training/training_loop.py), returns (logits, labels, loss, adj) exactly
+    like ImprovedEdgeGNN.forward().
+  - When called without labels, returns (logits, probabilities, predicted
+    class, attention weights [N]) for standalone inference/visualization.
   - Attention weights are directly usable by visualize_heatmap.py
 
 Architecture mirrors LENS classifier head dimensions for fair comparison:
@@ -59,24 +63,42 @@ class GatedAttentionPool(nn.Module):
     def forward(self, H: torch.Tensor):
         """
         Args:
-            H : patch embeddings  [N x input_dim]
+            H : patch embeddings  [B x N x input_dim]
         Returns:
-            A : attention weights [1 x N]    softmax over N patches
-            Z : slide embedding   [1 x input_dim]
+            scores : raw (unnormalized) attention logits [B x N x 1]
         """
-        A = self.w(self.V(H) * self.U(H))   # N x 1
-        A = F.softmax(A.T, dim=1)           # 1 x N   (softmax over patches)
-        Z = torch.mm(A, H)                  # 1 x input_dim
-        return A, Z
+        scores = self.w(self.V(H) * self.U(H))   # B x N x 1
+        return scores
+
+
+class _NoOpRegularizer:
+    """
+    Minimal stand-in for LENS's L0Regularization.
+
+    ABMIL uses no graph edges, so there is no density/lambda schedule to
+    track — but training/training_loop.py unconditionally reads
+    `model.regularizer.target_density` (and, when present, current_lambda /
+    current_lambda_density) while logging epoch metrics, regardless of which
+    model is being trained. This object satisfies that shared interface.
+    """
+    def __init__(self):
+        self.target_density = 0.0
+        self.current_lambda = 0.0
+        self.current_lambda_density = 0.0
 
 
 class ABMIL(nn.Module):
     """
     Attention-Based MIL for multi-class WSI classification.
 
-    Plugs into the LENS training infrastructure identically to ImprovedEdgeGNN:
-      - Accepts raw patch features [N x feature_dim] loaded from features.pt
-      - Returns (logits, Y_prob, Y_hat, A) matching LENS forward() signature
+    Plugs into the shared LENS training infrastructure (helper.Trainer /
+    training.training_loop.train_and_evaluate) identically to ImprovedEdgeGNN:
+      - Accepts batched patch features [B x N x feature_dim] (as produced by
+        helper.preparefeatureLabel) plus labels/masks, and internally computes
+        the classification loss, returning (logits, labels, loss, adj) exactly
+        like ImprovedEdgeGNN.forward().
+      - Called without labels (standalone inference), returns
+        (logits, Y_prob, Y_hat, attention_weights) instead.
       - get_attention_weights() returns [N] for visualize_heatmap.py
 
     Args:
@@ -122,24 +144,69 @@ class ABMIL(nn.Module):
             nn.Linear(hidden_dim, num_classes)
         )
 
-    def forward(self, x: torch.Tensor, adj=None):
+        # Compatibility shims for training/training_loop.py, which calls
+        # model.set_epoch(...) and reads model.regularizer.* unconditionally
+        # for every model type it trains, not just ImprovedEdgeGNN.
+        self.current_epoch = 0
+        self.regularizer = _NoOpRegularizer()
+
+    def set_epoch(self, epoch):
+        """No learned schedule to update — ABMIL has no edge sparsification."""
+        self.current_epoch = epoch
+
+    def set_print_stats(self, value):
+        """No-op: ABMIL has no per-batch edge-sparsity stats to print."""
+        pass
+
+    def forward(self, node_feat: torch.Tensor, labels: torch.Tensor = None,
+                adjs=None, masks: torch.Tensor = None):
         """
         Args:
-            x   : patch features [N x feature_dim]  from features.pt
-            adj : ignored (accepted for API compatibility with LENS loaders
-                  that pass both features and adjacency)
+            node_feat : patch features, [B x N x feature_dim] (batched, as
+                        produced by helper.preparefeatureLabel) or
+                        [N x feature_dim] for a single bag.
+            labels    : ground-truth labels [B] (LongTensor). When given,
+                        forward computes the classification loss internally
+                        and returns (logits, labels, loss, adjs), matching
+                        ImprovedEdgeGNN's forward() signature.
+            adjs      : ignored (ABMIL uses no graph structure); passed
+                        through unchanged as the 4th return value so callers
+                        expecting a "pruned adjacency" tensor keep working.
+            masks     : [B x N], 1 for real nodes / 0 for padding (optional;
+                        needed when batching graphs of different sizes).
         Returns:
-            logits  : [1 x num_classes]
-            Y_prob  : [1 x num_classes]  softmax probabilities
-            Y_hat   : scalar LongTensor  predicted class index
-            A       : [1 x N]            attention weights (for heatmap)
+            If labels is given : (logits, labels, loss, adjs)
+            Otherwise           : (logits, Y_prob, Y_hat, attention_weights)
         """
-        H      = self.projector(x)              # N x feature_dim
-        A, Z   = self.attention(H)              # A: 1xN,  Z: 1 x feature_dim
-        logits = self.classifier(Z)             # 1 x num_classes
-        Y_prob = F.softmax(logits, dim=1)       # 1 x num_classes
-        Y_hat  = torch.argmax(Y_prob, dim=1)    # scalar
-        return logits, Y_prob, Y_hat, A
+        single_bag = node_feat.dim() == 2
+        if single_bag:
+            node_feat = node_feat.unsqueeze(0)
+            if masks is not None:
+                masks = masks.unsqueeze(0)
+
+        H = self.projector(node_feat)                  # B x N x feature_dim
+        scores = self.attention(H)                     # B x N x 1
+
+        if masks is not None:
+            pad_mask = (masks == 0).unsqueeze(-1)       # B x N x 1
+            scores = scores.masked_fill(pad_mask, float('-inf'))
+
+        A = F.softmax(scores, dim=1)                    # B x N x 1 (softmax over patches)
+        Z = torch.sum(A * H, dim=1)                     # B x feature_dim
+
+        logits = self.classifier(Z)                     # B x num_classes
+
+        if labels is not None:
+            loss = F.cross_entropy(logits, labels)
+            return logits, labels, loss, adjs
+
+        Y_prob = F.softmax(logits, dim=1)               # B x num_classes
+        Y_hat = torch.argmax(Y_prob, dim=1)             # B
+        attn = A.squeeze(-1)                            # B x N
+        if single_bag:
+            attn = attn.squeeze(0)                      # N
+            Y_hat = Y_hat.squeeze(0)                    # scalar
+        return logits, Y_prob, Y_hat, attn
 
     def get_attention_weights(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -148,8 +215,8 @@ class ABMIL(nn.Module):
             weights = model.get_attention_weights(features)
             # weights[i] -> importance of patch i for heatmap rendering
         """
-        _, _, _, A = self.forward(x)
-        return A.squeeze(0)                     # N
+        _, _, _, attn = self.forward(x)
+        return attn                              # N
 
 
 # ---------------------------------------------------------------------------

@@ -96,6 +96,7 @@ def compute_feats(args, bags_list, i_classifier, save_path=None, whole_slide_pat
             file_name = bags_list[i].split('/')[-3].split('_')[0]
         if args.magnification == '5x' or args.magnification == '10x':
             csv_file_path = glob.glob(os.path.join(bags_list[i], '*.jpg'))
+            file_name = bags_list[i].split('/')[-3].split('_')[0]
 
         dataloader, bag_size = bag_dataset(args, csv_file_path)
         print('{} files to be processed: {}'.format(len(csv_file_path), file_name))

@@ -172,12 +172,16 @@ class EdgeScoringNetwork(nn.Module):
                     edge_weights = (probs > 0.5).float()
             else:
                 raise ValueError(f"Unknown l0_method: {self.l0_method}")
-            
+
             if print_stats:
                 active_edges = (edge_weights > 0.5).float().sum().item()
                 print(f"   [EdgeScoring-{self.l0_method.upper()}] Active edges: {active_edges}/{edge_features.size(0)} "
                       f"({100*active_edges/max(edge_features.size(0),1):.1f}%)")
-        
+        else:
+            # No L0 gating requested (e.g. reg_mode='none'): keep every
+            # existing edge with a full weight of 1 (no sparsification).
+            edge_weights = torch.ones_like(logAlpha)
+
         # Scatter edge weights and logits back to dense [B, N, N]
         edge_weights_dense = torch.zeros((batch_size, num_nodes, num_nodes), device=device)
         logAlpha_dense = torch.zeros((batch_size, num_nodes, num_nodes), device=device)

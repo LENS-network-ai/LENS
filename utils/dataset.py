@@ -50,7 +50,7 @@ class GraphDataset(data.Dataset):
             elif site == 'NLST':
                 self.classdict = {'normal': 0, 'tumor': 1}
             elif site == 'TCGA':
-                self.classdict = {'Normal': 0, 'TCGA-LUAD': 1, 'TCGA-LUSC': 2}
+                self.classdict = {'normal': 0, 'tcga-luad': 1, 'tcga-lusc': 2}
             else:
                 raise ValueError(f'Site {site} not recognized and classdict not provided')
         self.site = site

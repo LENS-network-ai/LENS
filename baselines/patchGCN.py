@@ -62,15 +62,15 @@ class PatchGCN(nn.Module):
         # Feature compression (matching original)
         if self.resample > 0:
             self.fc = nn.Sequential(*[
-                nn.Dropout(self.resample), 
-                nn.Linear(1024, 256), 
-                nn.ReLU(), 
+                nn.Dropout(self.resample),
+                nn.Linear(input_dim, 256),
+                nn.ReLU(),
                 nn.Dropout(0.25)
             ])
         else:
             self.fc = nn.Sequential(*[
-                nn.Linear(1024, hidden_dim), 
-                nn.ReLU(), 
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
                 nn.Dropout(0.25)
             ])
         

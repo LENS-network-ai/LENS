@@ -24,7 +24,7 @@ from baselines.GTP import GTP
 from baselines.gcn import GCN
 from baselines.graphLsurv import GraphLSurv
 from baselines.patchGCN import PatchGCN, DeepGraphConv
-from baselines.shared.computational_profiler import ComputationalProfiler
+from baselines.FLOPcalcul import ComputationalProfiler
 
 
 def collate_baseline(batch):

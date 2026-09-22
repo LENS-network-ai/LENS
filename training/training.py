@@ -79,7 +79,7 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
     
     # Initialize model
     model = ImprovedEdgeGNN(
-        feature_dim=512,
+        feature_dim=args.n_features,
         hidden_dim=256,
         num_classes=args.n_class,
         lambda_reg=lambda_reg,
@@ -120,7 +120,7 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         base_lr=args.lr,
         num_epochs=args.epochs,
         iters_per_epoch=len(train_loader),
-        warmup_epochs=5
+        warmup_epochs=args.warmup_epochs
     )
     
     # Setup WandB
@@ -151,7 +151,7 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
             'initial_temp': initial_temp,
             
             # Architecture
-            'feature_dim': 512,
+            'feature_dim': args.n_features,
             'hidden_dim': 256,
             'edge_dim': args.edge_dim,
             'num_classes': args.n_class,
@@ -201,6 +201,7 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         n_features=args.n_features,
         output_dir=output_dir,
         warmup_epochs=args.warmup_epochs,
+        ramp_epochs=args.ramp_epochs,
         wandb_config=wandb_config,
         l0_method=l0_method
     )

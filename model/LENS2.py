@@ -250,7 +250,7 @@ class ImprovedEdgeGNN(nn.Module):
         
         # Regularization
         if self.use_l0 and logAlpha is not None:
-            from model.EGL_L0_Reg import compute_density
+            from model.L0_Reg import compute_density
             current_density = compute_density(edge_weights, adjs)
             
             # Compute L0 penalty
@@ -275,7 +275,7 @@ class ImprovedEdgeGNN(nn.Module):
             density_loss = reg_stats.get('density_loss', 0)
             lambda_eff = reg_stats.get('lambda_eff', self.regularizer.current_lambda)
         else:
-            reg_loss = self.regularizer.compute_regularization(edge_weights, adjs)
+            reg_loss = self.regularizer.compute_regularization(edge_weights, adjs, return_stats=False)
             l0_loss = reg_loss.item() if isinstance(reg_loss, torch.Tensor) else reg_loss
             density_loss = 0
             lambda_eff = self.regularizer.current_lambda
