@@ -45,32 +45,67 @@ class L0Regularization:
     - Scheduled warmup and ramp-up for stability
     """
     
-    def __init__(self, 
-                 lambda_reg=0.0001, 
+    def __init__(self,
+                 lambda_reg=0.0001,
                  lambda_density=0.03,
                  target_density=0.30,
-                 warmup_epochs=15, 
+                 warmup_epochs=15,
                  ramp_epochs=20,
-                 l0_params=None, 
+                 l0_params=None,
                  l0_method='hard-concrete',
                  alpha_min=0.2,
                  alpha_max=2.0,
                  enable_adaptive_lambda=True,
-                 enable_density_loss=True):
-        
+                 enable_density_loss=True,
+                 density_loss_warmup_epochs=None,
+                 scale_density_loss_by_edges=False,
+                 temperature_min=1.0):
+        """
+        density_loss_warmup_epochs: epoch at which the density-loss
+        restoring term starts being applied. Defaults to `warmup_epochs`
+        (the original behavior) when None, for backward compatibility.
+        Pass 0 to have it active from the start -- the L0 penalty
+        (l0_loss) is one-directional (only ever pushes density down), so if
+        density_loss stays off for the whole warmup phase, nothing opposes
+        it and density can already overshoot well past target_density
+        before the restoring force is ever allowed to engage.
+
+        scale_density_loss_by_edges: multiply density_loss by the real edge
+        count. Defaults to False (original behavior) for backward
+        compatibility. current_density is a mean over edges, so without
+        this, density_loss's gradient per edge is diluted by 1/num_edges
+        while l0_loss's is not -- for large graphs this lets l0_loss
+        eventually dominate regardless of lambda_reg. Pass True to restore
+        parity between the two forces.
+
+        temperature_min: the plateau value the cosine-annealed temperature
+        settles at after warmup+ramp. Defaults to 1.0 (the original
+        hardcoded value) for backward compatibility. Lower values sharpen
+        the deterministic hard-concrete gate (l0_test), shrinking the
+        |logAlpha| needed to reach an exact 0 or 1 -- e.g. at 1.0 an edge
+        needs logAlpha < ~-2.4 to hit exact zero; at the literature's
+        standard 0.67 that drops to ~-1.6, a meaningfully easier bar,
+        directly relevant when gates are stuck in the ambiguous middle.
+        """
+
         # Core parameters
         self.base_lambda = lambda_reg
         self.current_lambda = 0.0
         self.l0_method = l0_method
         self.logits_storage = {}
-        
+        self.scale_density_loss_by_edges = scale_density_loss_by_edges
+        self.temperature_min = temperature_min
+        self.density_loss_warmup_epochs = (
+            warmup_epochs if density_loss_warmup_epochs is None else density_loss_warmup_epochs
+        )
+
         # Density control
         self.target_density = target_density
         self.base_lambda_density = lambda_density
         self.current_lambda_density = 0.0
         self.enable_adaptive_lambda = enable_adaptive_lambda
         self.enable_density_loss = enable_density_loss
-        
+
         # Adaptive lambda bounds
         self.alpha_min = alpha_min
         self.alpha_max = alpha_max
@@ -136,15 +171,23 @@ class L0Regularization:
     
     def update_lambda_density(self, current_epoch):
         """
-        Two-phase density lambda schedule:
+        Two-phase density lambda schedule, keyed to density_loss_warmup_epochs
+        (defaults to warmup_epochs for backward compatibility -- see __init__):
         - Warmup: 0 → 0.5 * λ_ρ
         - Ramp: 0.5 * λ_ρ → λ_ρ
+
+        NOTE: this used to key off self.warmup_epochs directly. Gating
+        compute_regularization_with_l0's density_loss term on
+        density_loss_warmup_epochs alone (e.g. passing 0 to activate it
+        immediately) has no effect unless this schedule is keyed off the
+        same value -- otherwise current_lambda_density is still ~0 for the
+        whole original warmup_epochs window regardless of the gate.
         """
-        if current_epoch < self.warmup_epochs:
-            progress = current_epoch / self.warmup_epochs
+        if current_epoch < self.density_loss_warmup_epochs:
+            progress = current_epoch / self.density_loss_warmup_epochs
             self.current_lambda_density = progress * 0.5 * self.base_lambda_density
         else:
-            post_warmup_epochs = current_epoch - self.warmup_epochs
+            post_warmup_epochs = current_epoch - self.density_loss_warmup_epochs
             ramp_duration = self.ramp_epochs / 2
             
             if post_warmup_epochs < ramp_duration:
@@ -154,7 +197,7 @@ class L0Regularization:
                 scale = 1.0
             
             self.current_lambda_density = scale * self.base_lambda_density
-    
+
     def update_temperature(self, current_epoch, initial_temp=5.0):
         """
         Three-phase temperature schedule with cosine annealing:
@@ -163,7 +206,7 @@ class L0Regularization:
         - Plateau: τ_min
         """
         tau_init = initial_temp
-        tau_min = 1.0
+        tau_min = self.temperature_min
         t_warmup = self.warmup_epochs
         t_anneal = self.warmup_epochs + self.ramp_epochs
         mu_min = 0.1
@@ -186,7 +229,7 @@ class L0Regularization:
         temperature = self.update_temperature(current_epoch, initial_temp)
         self.update_lambda(current_epoch)
         self.update_lambda_density(current_epoch)
-        
+
         return {
             'lambda': self.current_lambda,
             'lambda_density': self.current_lambda_density,
@@ -225,7 +268,7 @@ class L0Regularization:
         density_loss = self.current_lambda_density * (density_error ** 2)
         
         return density_loss
-    
+
     def compute_l0_loss(self):
         """Compute L0 penalty from stored logits"""
         if len(self.logits_storage) == 0:
@@ -267,15 +310,31 @@ class L0Regularization:
         l0_loss = lambda_eff * l0_penalty
         
         # Density loss
-        if self.enable_density_loss and self.current_epoch >= self.warmup_epochs:
+        if self.enable_density_loss and self.current_epoch >= self.density_loss_warmup_epochs:
             density_deviation = torch.abs(current_density - self.target_density)
             density_loss = self.current_lambda_density * density_deviation
+            if self.scale_density_loss_by_edges:
+                # current_density is a MEAN over edges, so its gradient on any
+                # single edge's weight is diluted by 1/num_edges -- meaning
+                # density_loss's per-edge restoring push shrinks as graphs
+                # get bigger, while l0_loss's per-edge closing push (a sum,
+                # not a mean, over real edges) does not. For large graphs
+                # density_loss's ceiling ends up far weaker than l0_loss's,
+                # so once l0_loss's schedule grows enough it always wins
+                # regardless of lambda_reg -- confirmed empirically: density
+                # held a stable plateau near target_density only while
+                # l0_loss's cumulative pressure stayed below this ceiling,
+                # then resumed collapsing once it crossed it. Multiplying by
+                # edge count restores parity between the two per-edge forces.
+                edge_mask = (adj_matrix > 0).float()
+                num_edges = edge_mask.sum().clamp(min=1.0)
+                density_loss = density_loss * num_edges
         else:
             density_loss = torch.tensor(0.0, device=device)
-        
+
         # Total
         reg_loss = l0_loss + density_loss
-        
+
         if return_stats:
             stats = {
                 'l0_loss': l0_loss.item() if isinstance(l0_loss, torch.Tensor) else l0_loss,
