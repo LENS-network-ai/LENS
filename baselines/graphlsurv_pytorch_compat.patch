@@ -1,0 +1,50 @@
+diff --git a/S02-modeling/layers.py b/S02-modeling/layers.py
+index aa17fb0..1b9c703 100644
+--- a/S02-modeling/layers.py
++++ b/S02-modeling/layers.py
+@@ -1,6 +1,14 @@
+ import torch
+ from torch_geometric.nn import GCNConv
+-from torch_geometric.nn.pool.topk_pool import topk, filter_adj
++try:
++    # topk/filter_adj were free functions in older torch_geometric; newer
++    # versions restructured pooling internals and no longer expose them
++    # here. Only SAGPool (used by the unrelated GPNet variant, not by
++    # GraphLSurv/AnchorGraphLearner/AnchorGCN) needs them, so this is made
++    # optional rather than blocking the import of the classes we do need.
++    from torch_geometric.nn.pool.topk_pool import topk, filter_adj
++except ImportError:
++    topk, filter_adj = None, None
+ import torch.nn as nn
+ from torch.nn import Parameter
+ import torch.nn.functional as F
+diff --git a/S02-modeling/utils.py b/S02-modeling/utils.py
+index ce99cb7..198e2e5 100644
+--- a/S02-modeling/utils.py
++++ b/S02-modeling/utils.py
+@@ -315,16 +315,21 @@ def sample_anchors(x, node_mask, ratio, fill_value=0):
+     x: [B, N_max, F]
+     node_mask: [B, N_max]
+     """
++    # NOTE: .item()/int() conversions below are a PyTorch-version
++    # compatibility fix (this repo predates PyTorch enforcing strict
++    # int-vs-0-dim-tensor typing for randperm/arange/new_full's size list) --
++    # values and behavior are unchanged, just explicit Python ints instead
++    # of implicitly-coerced 0-dim tensors.
+     batch_size = x.size(0)
+     num_nodes = node_mask.sum(1)
+-    max_nodes = num_nodes.max().cpu()
++    max_nodes = int(num_nodes.max().cpu())
+     assert max_nodes == x.size(1)
+ 
+     sampled_num_nodes = (ratio * num_nodes).to(num_nodes.dtype)
+-    sampled_max_nodes = sampled_num_nodes.max().cpu()
+-    sampled_col_index = [torch.randperm(num_nodes[i])[:sampled_num_nodes[i]] for i in range(x.size(0))]
++    sampled_max_nodes = int(sampled_num_nodes.max().cpu())
++    sampled_col_index = [torch.randperm(int(num_nodes[i]))[:int(sampled_num_nodes[i])] for i in range(x.size(0))]
+     sampled_idx = torch.cat([i*max_nodes + sampled_col_index[i] for i in range(x.size(0))])
+-    insert_idx = torch.cat([i*sampled_max_nodes + torch.arange(sampled_num_nodes[i]) for i in range(x.size(0))])
++    insert_idx = torch.cat([i*sampled_max_nodes + torch.arange(int(sampled_num_nodes[i])) for i in range(x.size(0))])
+ 
+     x = x.view([x.size(0) * x.size(1)] + list(x.size())[2:])
+     size = [batch_size * sampled_max_nodes] + list(x.size())[1:]
