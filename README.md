@@ -2,9 +2,10 @@
 <h1 align="center">LENS: Learnable Edge Network Sparsification for Interpretable Histopathology</h1>
 <!-- Overview Image -->
 <div align="center">
-<img width="3721" height="3371" alt="lens_verti" src="https://github.com/user-attachments/assets/61a89f7b-0584-47fe-842e-953f97e9c3c7" />
+<img width="1654" height="951" alt="gnrl_arch_lens_F" src="https://github.com/user-attachments/assets/f55f8521-7194-4836-a277-24641be12502" />
   <p><em>LENS: A graph neural network approach for interpretable histopathology analysis through learnable edge sparsification</em></p>
 </div>
+
 
 
 
@@ -24,7 +25,7 @@ cd LENS
 pip install -r requirements.txt
 ```
 
-### Dataset Information
+
 ## Dataset Information
 
 The **CPTAC (Clinical Proteomic Tumor Analysis Consortium)** dataset serves as the main benchmark in this work. CPTAC data are publicly available from the U.S. National Cancer Institute via The Cancer Imaging Archive (TCIA):
@@ -40,6 +41,26 @@ To assess the generalizability of our approach, we additionally evaluate on mult
 
 TCGA data are obtained from the Genomic Data Commons (GDC) portal : https://portal.gdc.cancer.gov/.
 
+### Feature Extraction
+
+We use **UNI2-h** (Chen et al., 2024), the state-of-the-art pathology foundation model (ViT-H/14, 1536-dim, pretrained on 200M+ H&E and IHC images from 350K+ slides). We leverage the official pre-extracted embeddings released by the Mahmood Lab on HuggingFace at 256x256 / 20x magnification (field standard):
+
+📥 [Download UNI2-h features](https://huggingface.co/datasets/MahmoodLab/UNI2-h-features)
+
+To convert UNI2-h h5 files to LENS format:
+
+```bash
+python convert_uni2_to_lens.py \
+    --h5-dir /path/to/uni2_h5_files \
+    --output-dir /path/to/uni2_graphs \
+    --train-list /path/to/train_list.txt
+```
+
+This reads h5 files (features + coordinates), builds 8-NN spatial graphs from patch coordinates, and saves `features.pt` (N x 1536) + `adj_s.pt` (sparse adjacency) per slide.
+
+
+
+**Alternative encoder:**  We also provide support for SimCLR-ResNet18 (512-dim, 512x512 @ 20x) from [GTP](https://github.com/vkola-lab/tmi2022/tree/main/feature_extractor). Use `--n-features 512` for SimCLR features.
 
 ### Step 1: WSI Tiling
 ```bash
