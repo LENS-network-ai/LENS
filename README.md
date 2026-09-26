@@ -1,8 +1,9 @@
+
 <!-- Project Title Banner -->
 <h1 align="center">LENS: Learnable Edge Network Sparsification for Interpretable Histopathology</h1>
 <!-- Overview Image -->
 <div align="center">
-<img width="1654" height="951" alt="gnrl_arch_lens_F" src="https://github.com/user-attachments/assets/f55f8521-7194-4836-a277-24641be12502" />
+<img width="1654" height="951" alt="gnrl_arch_lens_F" src="https://github.com/user-attachments/assets/fd7bbf4a-c19f-480f-bb76-bfc5f38b6a58"  />
   <p><em>LENS: A graph neural network approach for interpretable histopathology analysis through learnable edge sparsification</em></p>
 </div>
 
