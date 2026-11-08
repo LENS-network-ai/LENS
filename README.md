@@ -1,8 +1,9 @@
+
 <!-- Project Title Banner -->
 <h1 align="center">LENS: Learnable Edge Network Sparsification for Interpretable Histopathology</h1>
 <!-- Overview Image -->
 <div align="center">
-<img width="1654" height="951" alt="gnrl_arch_lens_F" src="https://github.com/user-attachments/assets/f55f8521-7194-4836-a277-24641be12502" />
+<img width="1654" height="951" alt="gnrl_arch_lens_F" src="https://github.com/LENS-network-ai/LENS/blob/main/fig1_lens_case_600dpi.png"  />
   <p><em>LENS: A graph neural network approach for interpretable histopathology analysis through learnable edge sparsification</em></p>
 </div>
 
@@ -433,120 +434,6 @@ LENS demonstrates robust discriminative power while utilizing only ~30% of the g
 </div>
 
 
-
-
-## 🧬 Survival Prediction (TCGA-BRCA)
-
-LENS's edge-sparsification core (`EdgeScoringNetwork` + Hard-Concrete L0 +
-`MultiLayerGNN` + attention pooling -- the exact same mechanism used for
-classification above) is reused unchanged for discrete-time survival
-prediction, with only the task head and loss swapped: hazards over discrete
-time bins plus a survival NLL loss (`model/LENS_survival.py`,
-`model/survival_loss.py`), instead of class logits and cross-entropy.
-
-### Preprocessing
-
-Builds LENS-format graphs directly from already-extracted CLAM-style patch
-features and coordinates (patch-features `.pt` files + patches `.h5`
-files), and survival labels from a healnet-style omics/survival CSV:
-
-```bash
-python preprocessing/build_survival_graphs.py \
-  --patch-features-dir /path/to/patch_features \
-  --patches-dir        /path/to/patches \
-  --output             data/TCGA-BRCA-SURV/simclr_files
-
-python preprocessing/build_survival_labels.py \
-  --omic-csv   /path/to/tcga_brca_all_clean.csv.zip \
-  --graphs-dir data/TCGA-BRCA-SURV/simclr_files \
-  --output-dir data/TCGA-BRCA-SURV \
-  --n-bins 4 --subset uncensored
-```
-
-Adjacency is built from patch coordinates directly, via a self-calibrating
-radius (median nearest-neighbor spacing x 1.5) rather than a fixed
-patch-size/downsample assumption -- see that script's docstring for why.
-Label discretization follows the standard MCAT/PORPOISE convention: quantile
-bin edges computed from the *uncensored* patients only, then applied to
-everyone.
-
-### Training
-
-5-fold patient-stratified cross-validation on the training pool, plus one
-fixed held-out test set never touched by fold-level training or model
-selection:
-
-```bash
-python training/train_survival.py \
-  --data-root  data/TCGA-BRCA-SURV/simclr_files \
-  --train-list data/TCGA-BRCA-SURV/train_list_surv.txt \
-  --test-list  data/TCGA-BRCA-SURV/test_list_surv.txt \
-  --n-features 2048 --epochs 60 --n-folds 5 \
-  --lambda-reg 0.0001 --warmup-epochs 15 --ramp-epochs 20 \
-  --output-dir results/survival_brca \
-  --use-wandb --wandb-project lens-survival-brca
-```
-
-Each fold reports val c-index (model selection only) and a single
-held-out test c-index; per-slide edge retention detail (kept-edge counts,
-weight distributions, and sparse pruned adjacencies for later
-interpretability work) is written automatically to
-`<output-dir>/foldN_test_edge_details/`. To re-run that detailed analysis on
-an already-trained checkpoint without retraining:
-
-```bash
-python -m training.reevaluate_test_details \
-  --checkpoint results/survival_brca/run_.../fold1_best_model.pt \
-  --data-root  data/TCGA-BRCA-SURV/simclr_files \
-  --test-list  data/TCGA-BRCA-SURV/test_list_surv.txt
-```
-(Must be invoked with `-m`, not as a direct script path, to avoid a
-`training/training.py` module-name collision with the `training` package.)
-
-### Reproducibility protocol
-
-Every run is patient-grouped (`StratifiedGroupKFold` on TCGA patient
-barcodes, not raw slide IDs -- a meaningful fraction of patients in this
-cohort contribute more than one slide, and a plain slide-level split leaks
-a patient's other slide across train/val) and fully seed-controlled
-(`--seed`, default 42 -- covers `torch`/`numpy`/the fold splitter; no
-untracked randomness sources). For the paper's reported numbers we run
-**3 fixed seeds (42, 123, 2024) x 5-fold CV** on the winning hyperparameter
-configuration and report mean +/- std of the per-seed fold-means (not a
-flat pool of all 15 runs, since folds within one seed aren't independent
-draws) -- see `training/sweep_survival.yaml`'s header comment for the exact
-combined objective used to pick that configuration.
-
-### Hyperparameter sweep
-
-```bash
-wandb sweep training/sweep_survival.yaml   # prints a sweep ID
-wandb agent --count 20 <entity>/<project>/<sweep_id>
-```
-
-Searches `lambda-reg` / `warmup-epochs` / `ramp-epochs` to minimize
-`combined_objective = val_loss + val_ambiguity` (ambiguity =
-`mean[gate * (1-gate)]` on the deterministic gate -- 0 for genuine
-bimodal edge separation, ~0.21-0.25 for a uniform "adequate" cluster
-with no real separation). See the YAML's header for the full rationale.
-
-### Baseline: GraphLSurv
-
-Comparison against the original published
-[GraphLSurv](https://github.com/liupei101/GraphLSurv), adapted to the same
-patient-grouped 5-fold + fixed-test protocol. The original repo isn't
-vendored into this one -- fetch and patch it (two small PyTorch/PyG
-version-compatibility fixes, no behavior change) with:
-
-```bash
-bash baselines/setup_graphlsurv_baseline.sh
-
-python training/train_graphlsurv_survival.py \
-  --data-root  data/TCGA-BRCA-SURV/simclr_files \
-  --train-list data/TCGA-BRCA-SURV/train_list_surv.txt \
-  --test-list  data/TCGA-BRCA-SURV/test_list_surv.txt \
-  --batch-size 16 --n-folds 5
-```
 
 ## 📄 License
 
