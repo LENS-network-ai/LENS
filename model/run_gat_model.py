@@ -76,7 +76,7 @@ def main():
     # Initialize model
     model = LENSWithGAT(
         feature_dim=args.n_features,
-        hidden_dim=args.hidden_dims if isinstance(args.hidden_dims, int) else args.hidden_dims[0],
+        hidden_dim=args.hidden_dim,
         num_classes=args.n_class,
         beta=args.beta,
         egl_mode=args.egl_mode,

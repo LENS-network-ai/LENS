@@ -180,7 +180,6 @@ class ImprovedEdgeGNNSurvival(nn.Module):
         # classifier forward pass above still uses the stochastic
         # `edge_weights` unchanged -- only this control-loop input changes.
         deterministic_edge_weights = l0_test(logAlpha, params=self.l0_params, temperature=self.temperature)
-        current_density = compute_density(deterministic_edge_weights, adjs)
 
         # L0 penalty summed over real edges only (masked), NOT averaged.
         # logAlpha is the *dense* [B, N, N] tensor scattered from the sparse
@@ -200,7 +199,18 @@ class ImprovedEdgeGNNSurvival(nn.Module):
         # its natural sigmoid-derivative scale, independent of graph size,
         # while still excluding the spurious non-edge terms.
         edge_mask = (adjs > 0).float()
-        l0_penalty = (get_loss2(logAlpha, params=self.l0_params) * edge_mask).sum()
+        keep_prob = get_loss2(logAlpha, params=self.l0_params) * edge_mask
+        l0_penalty = keep_prob.sum()
+
+        # Density = expected FRACTION OF KEPT EDGES, mean_e P(z_e > 0), i.e. the
+        # mean keep probability pi. This counts edges that survive, not the mean
+        # gate VALUE: a uniform soft solution (every gate ~0.3) satisfies a
+        # mean-gate target while removing nothing, whereas pi = 0.3 on every
+        # edge puts every deterministic gate at exactly 0 (pi crosses 0.5 at
+        # the gate's zero threshold), so hitting the target requires a real
+        # kept/removed split. pi is deterministic in the logits (no sampling
+        # noise), so it has no stochastic/deterministic mismatch.
+        current_density = compute_density(keep_prob, adjs)
 
         # Ambiguity: mean_{real edges}[gate * (1 - gate)] on the deterministic
         # gate. Pure monitoring stat -- NOT part of total_loss (a confidence
@@ -216,7 +226,7 @@ class ImprovedEdgeGNNSurvival(nn.Module):
             ambiguity = (deterministic_edge_weights * (1.0 - deterministic_edge_weights) * edge_mask).sum() / num_real
 
         reg_loss, reg_stats = self.regularizer.compute_regularization_with_l0(
-            l0_penalty=l0_penalty, edge_weights=deterministic_edge_weights, adj_matrix=adjs, return_stats=True
+            l0_penalty=l0_penalty, edge_weights=keep_prob, adj_matrix=adjs, return_stats=True
         )
 
         total_loss = survival_loss + reg_loss

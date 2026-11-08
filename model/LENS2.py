@@ -12,7 +12,7 @@ from model.attPooling import MultiHeadAttentionPooling
 from model.L0_Reg import L0Regularization
 from model.EdgeScoring import EdgeScoringNetwork
 from model.StatsTracker import StatsTracker
-from model.L0Utils import l0_train, l0_test, L0RegularizerParams
+from model.L0Utils import l0_train, l0_test, L0RegularizerParams, get_loss2
 from model.L0Utils_ARM import ARML0RegularizerParams, arm_sample_gates
 
 
@@ -53,7 +53,8 @@ class ImprovedEdgeGNN(nn.Module):
                  enable_adaptive_lambda=True,
                  enable_density_loss=True,
                  alpha_min=0.2,
-                 alpha_max=2.0):
+                 alpha_max=2.0,
+                 edge_logit_norm=False):
         
         super().__init__()
         
@@ -82,6 +83,8 @@ class ImprovedEdgeGNN(nn.Module):
             edge_dim=edge_dim,
             l0_method=l0_method,
             l0_params=self.l0_params,
+            logit_norm=edge_logit_norm,
+            target_density=target_density,
         )
         
         # Multi-Layer GNN
@@ -105,7 +108,12 @@ class ImprovedEdgeGNN(nn.Module):
             from model.GraphPooling import EdgeWeightedAttentionPooling
             self.pooling = EdgeWeightedAttentionPooling()
         
-        # Regularizer
+        # Regularizer. density_loss_warmup_epochs/scale_density_loss_by_edges/
+        # temperature_min match model/LENS_survival.py's settings -- ported
+        # here after confirming classification exhibits the exact same
+        # collapse (logAlpha driven to <-7 by epoch 3, deterministic gate
+        # 100% ambiguous) that these fixes were originally written for. See
+        # L0Regularization's docstring for what each one does and why.
         self.regularizer = L0Regularization(
             lambda_reg=lambda_reg,
             lambda_density=lambda_density,
@@ -118,6 +126,9 @@ class ImprovedEdgeGNN(nn.Module):
             alpha_max=alpha_max,
             enable_adaptive_lambda=enable_adaptive_lambda,
             enable_density_loss=enable_density_loss,
+            density_loss_warmup_epochs=0,
+            scale_density_loss_by_edges=True,
+            temperature_min=0.67,
         )
         
         # Stats tracker
@@ -251,26 +262,58 @@ class ImprovedEdgeGNN(nn.Module):
         # Regularization
         if self.use_l0 and logAlpha is not None:
             from model.L0_Reg import compute_density
-            current_density = compute_density(edge_weights, adjs)
-            
-            # Compute L0 penalty
+
             if self.l0_method == 'hard-concrete':
+                # Both fixes ported from model/LENS_survival.py after
+                # confirming classification hit the identical collapse:
+                #
+                # 1. l0_penalty masked to real edges only (edge_mask),
+                #    NOT summed over the full dense [B,N,N] logAlpha --
+                #    logAlpha is zero-filled at every non-edge position, and
+                #    an unmasked .sum() includes get_loss2(0) for every one
+                #    of the O(N^2 - E) non-edge entries. For these WSI
+                #    graphs (hundreds+ nodes, ~8 edges/node) that inflated
+                #    the penalty ~89x over the real edge count (confirmed:
+                #    l0_penalty=451344 against n_real_edges=5086), swamping
+                #    cls_loss by 100-1000x and driving logAlpha to <-7 by
+                #    epoch 3.
+                # 2. Density control driven by the deterministic gate
+                #    (l0_test), not the stochastic training-time gate
+                #    (edge_weights, from l0_train) -- they can disagree
+                #    badly, same as survival found. The GNN/pooling/
+                #    classifier forward pass above still uses the
+                #    stochastic `edge_weights` unchanged.
+                edge_mask = (adjs > 0).float()
                 from model.L0Utils import get_loss2
-                l0_penalty = get_loss2(logAlpha, params=self.l0_params).sum()
+                keep_prob = get_loss2(logAlpha, params=self.l0_params) * edge_mask
+                l0_penalty = keep_prob.sum()
+
+                # Deterministic gate kept for the [DEBUG] diagnostics only.
+                deterministic_edge_weights = l0_test(logAlpha, params=self.l0_params, temperature=self.temperature)
+                # Density = expected fraction of KEPT edges, mean_e P(z_e > 0)
+                # (the mean keep probability pi), not the mean gate value; see
+                # model/LENS_survival.py for why a mean-gate target can be met
+                # with no edges removed.
+                current_density = compute_density(keep_prob, adjs)
+                density_control_weights = keep_prob
             elif self.l0_method == 'arm':
+                # Not covered by the survival-side fix (ARM has no l0_test
+                # analog) -- left as before.
+                current_density = compute_density(edge_weights, adjs)
+                density_control_weights = edge_weights
                 from model.L0Utils_ARM import get_expected_l0_arm
                 l0_penalty = get_expected_l0_arm(logAlpha, self.l0_params)
             else:
                 raise ValueError(f"Unknown l0_method: {self.l0_method}")
-            
+
             # Compute regularization
             reg_loss, reg_stats = self.regularizer.compute_regularization_with_l0(
                 l0_penalty=l0_penalty,
-                edge_weights=edge_weights,
+                edge_weights=density_control_weights,
                 adj_matrix=adjs,
                 return_stats=True
             )
-            
+
             l0_loss = reg_stats.get('l0_loss', 0)
             density_loss = reg_stats.get('density_loss', 0)
             lambda_eff = reg_stats.get('lambda_eff', self.regularizer.current_lambda)
@@ -289,7 +332,48 @@ class ImprovedEdgeGNN(nn.Module):
             edge_weights, adjs, cls_loss, reg_loss,
             self.current_epoch, lambda_eff
         )
-        
+
+        # Same rich per-batch [DEBUG] block as model/LENS_survival.py's
+        # forward() -- logAlpha/gate distributions, not just epoch
+        # averages. Hard-concrete only (ARM/STE have no l0_test analog).
+        # Reuses edge_mask/deterministic_edge_weights computed above for
+        # the actual density-control mechanism, rather than recomputing --
+        # this IS the gate driving current_density/reg_loss now, not just
+        # a diagnostic-only observation.
+        if self.stats_tracker.print_stats and self.use_l0 and logAlpha is not None \
+                and self.l0_method == 'hard-concrete':
+            with torch.no_grad():
+                real_mask = edge_mask.bool()
+                real_logits = logAlpha[real_mask]
+                stoch = edge_weights[real_mask]
+                det = deterministic_edge_weights[real_mask]
+                n_real = real_logits.numel()
+
+                def _pct(x, p):
+                    return torch.quantile(x, p).item() if x.numel() > 0 else float('nan')
+
+                density_pct = current_density.item() * 100 if isinstance(current_density, torch.Tensor) else current_density * 100
+                l0_penalty_val = l0_penalty.item() if isinstance(l0_penalty, torch.Tensor) else l0_penalty
+
+                print(f"    [DEBUG] epoch={self.current_epoch} temp={self.temperature:.3f} "
+                      f"lambda_eff={lambda_eff:.6f} density={density_pct:.1f}% "
+                      f"n_real_edges={n_real}")
+                print(f"    [DEBUG] loss: cls={cls_loss.item():.4f} "
+                      f"reg={reg_loss.item():.4f} l0_penalty={l0_penalty_val:.2f}")
+                print(f"    [DEBUG] logAlpha:      "
+                      f"min={real_logits.min().item():.3f} p10={_pct(real_logits, 0.1):.3f} "
+                      f"p50={_pct(real_logits, 0.5):.3f} p90={_pct(real_logits, 0.9):.3f} "
+                      f"max={real_logits.max().item():.3f} std={real_logits.std().item():.3f}")
+                print(f"    [DEBUG] stochastic gate  (used for GNN forward pass, l0_train): "
+                      f"min={stoch.min().item():.3f} mean={stoch.mean().item():.3f} max={stoch.max().item():.3f} "
+                      f"exact0={(stoch == 0).float().mean().item()*100:.1f}% "
+                      f"exact1={(stoch == 1).float().mean().item()*100:.1f}%")
+                print(f"    [DEBUG] deterministic gate (drives density control, l0_test): "
+                      f"min={det.min().item():.3f} mean={det.mean().item():.3f} max={det.max().item():.3f} "
+                      f"exact0={(det == 0).float().mean().item()*100:.1f}% "
+                      f">0.5={(det > 0.5).float().mean().item()*100:.1f}% "
+                      f"ambiguous(0,0.5]={((det > 0) & (det <= 0.5)).float().mean().item()*100:.1f}%")
+
         # Add density control stats
         if not hasattr(self.stats_tracker, 'density_loss_history'):
             self.stats_tracker.density_loss_history = []

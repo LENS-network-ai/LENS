@@ -17,12 +17,12 @@ from helper import collate
 from utils.lr_scheduler import LR_Scheduler
 
 
-def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir, 
+def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
                    use_wandb=True, wandb_project='lens-training',
-                   fold=None, run_name=None):
+                   fold=None, run_name=None, test_dataset=None):
     """
     Train the ImprovedEdgeGNN (LENS) model with WandB logging
-    
+
     Args:
         dataset: Full dataset
         train_idx: Training indices
@@ -33,6 +33,13 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         wandb_project: WandB project name
         fold: Fold number (for cross-validation)
         run_name: Custom run name
+        test_dataset: Optional fixed held-out test set (a full GraphDataset,
+            not an index subset -- disjoint from `dataset`, shared as-is
+            across every fold). When given, the best checkpoint selected
+            during training is automatically evaluated against it once
+            training finishes (see train_and_evaluate) -- the same
+            prediction/evaluation code path validation already uses, just
+            pointed at held-out data, rather than a separate test script.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -50,12 +57,21 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         collate_fn=collate
     )
     val_loader = DataLoader(
-        val_subset, 
-        batch_size=args.batch_size, 
-        shuffle=False, 
+        val_subset,
+        batch_size=args.batch_size,
+        shuffle=False,
         collate_fn=collate
     )
-    
+
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=collate
+        )
+
     print("\n" + "="*60)
     print(f"Training LENS Model ({l0_method.upper()})")
     print("="*60)
@@ -76,11 +92,14 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
     l0_beta = args.l0_beta if hasattr(args, 'l0_beta') else 0.66
     baseline_ema = args.baseline_ema if hasattr(args, 'baseline_ema') else 0.9
     initial_temp = args.initial_temp if hasattr(args, 'initial_temp') else 5.0
-    
+    # Was hardcoded 256 regardless of the (formerly dead) --hidden-dims flag
+    # -- now genuinely configurable via --hidden-dim (utils/config.py).
+    hidden_dim = args.hidden_dim if hasattr(args, 'hidden_dim') else 256
+
     # Initialize model
     model = ImprovedEdgeGNN(
         feature_dim=args.n_features,
-        hidden_dim=256,
+        hidden_dim=hidden_dim,
         num_classes=args.n_class,
         lambda_reg=lambda_reg,
         reg_mode=reg_mode,
@@ -97,7 +116,18 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         l0_zeta=l0_zeta,
         l0_beta=l0_beta,
         baseline_ema=baseline_ema,
-        initial_temp=initial_temp
+        initial_temp=initial_temp,
+        # Previously not forwarded: --lambda-density/--target-density/--ramp-epochs/
+        # --alpha-min/--alpha-max/--enable-* were parsed but the model always ran
+        # with its constructor defaults.
+        lambda_density=getattr(args, 'lambda_density', 0.03),
+        target_density=getattr(args, 'target_density', 0.30),
+        ramp_epochs=getattr(args, 'ramp_epochs', 20),
+        enable_adaptive_lambda=getattr(args, 'enable_adaptive_lambda', True),
+        enable_density_loss=getattr(args, 'enable_density_loss', True),
+        alpha_min=getattr(args, 'alpha_min', 0.2),
+        alpha_max=getattr(args, 'alpha_max', 2.0),
+        edge_logit_norm=getattr(args, 'edge_logit_norm', False),
     ).to(device)
     
     # Print model info
@@ -152,7 +182,7 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
             
             # Architecture
             'feature_dim': args.n_features,
-            'hidden_dim': 256,
+            'hidden_dim': hidden_dim,
             'edge_dim': args.edge_dim,
             'num_classes': args.n_class,
             'dropout': args.dropout,
@@ -203,9 +233,10 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         warmup_epochs=args.warmup_epochs,
         ramp_epochs=args.ramp_epochs,
         wandb_config=wandb_config,
-        l0_method=l0_method
+        l0_method=l0_method,
+        test_loader=test_loader,
     )
-    
+
     # Save final model
     final_model_path = os.path.join(output_dir, 'final_model.pt')
     torch.save({
@@ -215,6 +246,7 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
         'val_accuracy': results["val_accs"][-1],
         'best_val_accuracy': results["best_val_acc"],
         'best_epoch': results["best_epoch"],
+        'test_accuracy': results.get("test_accuracy"),
         'l0_method': l0_method,
         'config': vars(args),
     }, final_model_path)
@@ -296,7 +328,7 @@ def save_training_results(args, output_dir, results, model, l0_method):
         # Other parameters
         f.write(f"\nArchitecture:\n")
         f.write(f"  - Edge Dimension: {args.edge_dim}\n")
-        f.write(f"  - Hidden Dimensions: {args.hidden_dims if hasattr(args, 'hidden_dims') else 512}\n")
+        f.write(f"  - Hidden Dimensions: {args.hidden_dim if hasattr(args, 'hidden_dim') else 256}\n")
         f.write(f"  - Dropout: {args.dropout}\n")
         
         f.write(f"\nTraining:\n")
@@ -317,6 +349,9 @@ def save_training_results(args, output_dir, results, model, l0_method):
         
         f.write(f"Best Validation Accuracy: {results['best_val_acc']:.4f}\n")
         f.write(f"Best Epoch: {results['best_epoch']}\n")
+        if results.get('test_accuracy') is not None:
+            f.write(f"Held-out Test Accuracy: {results['test_accuracy']:.4f} "
+                    f"(same checkpoint as best validation accuracy above)\n")
         
         if 'best_edge_sparsity' in results:
             f.write(f"Edge Sparsity at Best: {results['best_edge_sparsity']:.1f}%\n")
@@ -362,7 +397,9 @@ def print_training_summary(results, model, l0_method):
     
     print(f"\nPerformance:")
     print(f"  Best Val Accuracy: {results['best_val_acc']:.4f} (Epoch {results['best_epoch']})")
-    
+    if results.get('test_accuracy') is not None:
+        print(f"  Held-out Test Accuracy: {results['test_accuracy']:.4f}")
+
     if 'best_edge_sparsity' in results:
         print(f"  Edge Sparsity: {results['best_edge_sparsity']:.1f}%")
     

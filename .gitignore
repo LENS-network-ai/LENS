@@ -257,3 +257,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+baselines/WiKG_original/
+
+# Keep paper figures (overrides *.pdf above)
+!figures/*.pdf
+!figures/*.png

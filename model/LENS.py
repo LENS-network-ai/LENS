@@ -251,11 +251,10 @@ class ImprovedEdgeGNN(nn.Module):
         """Neighborhood aggregation with learned edge weights + self-loops"""
         # Add self-loops
         eye = torch.eye(adj_matrix.size(1), device=adj_matrix.device).unsqueeze(0)
-        adj_matrix = adj_matrix + eye
-        adj_matrix = torch.clamp(adj_matrix, max=1.0)
-        
-        # Apply edge weights
-        weighted_adj = adj_matrix * edge_weights
+
+        # Apply edge weights; self-loop weight is a fixed 1 added after gating
+        # (see model/multilayerGNN.py for why).
+        weighted_adj = adj_matrix * edge_weights + eye
         
         # Row-normalize
         row_sum = torch.sum(weighted_adj, dim=2, keepdim=True) + 1e-8

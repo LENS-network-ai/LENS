@@ -38,7 +38,7 @@ def main():
     args_cli = parser.parse_args()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    ckpt = torch.load(args_cli.checkpoint, map_location=device)
+    ckpt = torch.load(args_cli.checkpoint, map_location=device, weights_only=False)
     args = argparse.Namespace(**ckpt['config'])
 
     if args_cli.data_root is not None:

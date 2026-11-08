@@ -94,8 +94,14 @@ def train_abmil(
     hidden_dim = getattr(args, 'hidden_dim', 256)
     dropout    = getattr(args, 'dropout', 0.25)
 
+    # Was hardcoded 512 (ResNet18-SimCLR) regardless of args.n_features --
+    # this docstring says train_abmil() mirrors train_edge_gnn()'s signature
+    # specifically so it's a drop-in replacement called with the same args,
+    # and train_edge_gnn already reads feature_dim=args.n_features. Silently
+    # ignoring it here meant pointing ABMIL at a different feature extractor
+    # (e.g. UNI2-h's 1536-dim) would crash on the first Linear layer.
     model = ABMIL(
-        feature_dim=512,
+        feature_dim=args.n_features,
         hidden_dim=hidden_dim,
         num_classes=args.n_class,
         dropout=dropout
@@ -103,7 +109,7 @@ def train_abmil(
 
     print(f"\nModel Configuration:")
     print(f"  Method     : ABMIL (Gated Attention MIL)")
-    print(f"  Feature dim: 512  (ResNet18-SimCLR)")
+    print(f"  Feature dim: {args.n_features}")
     print(f"  Hidden dim : {hidden_dim}")
     print(f"  Num classes: {args.n_class}")
     print(f"  Dropout    : {dropout}")
@@ -122,7 +128,7 @@ def train_abmil(
         base_lr=args.lr,
         num_epochs=args.epochs,
         iters_per_epoch=len(train_loader),
-        warmup_epochs=5
+        warmup_epochs=getattr(args, 'warmup_epochs', 5)
     )
 
     # -----------------------------------------------------------------------

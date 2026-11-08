@@ -7,12 +7,12 @@ import numpy as np
 import argparse
 import optuna
 from datetime import datetime
-from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import Subset
 
 from training.training import train_edge_gnn
 from utils.dataset import GraphDataset
-from utils.config import get_parser
+from utils.config import get_parser, validate_common_paths
+from utils.splits import make_folds, patient_id
 
 def run_bayesian_optimization(args):
     """Run Bayesian optimization to find optimal parameters"""
@@ -40,7 +40,7 @@ def run_bayesian_optimization(args):
     with open(args.train_list, 'r') as f:
         all_ids = f.readlines()
     
-    dataset = GraphDataset(root=args.data_root, ids=all_ids)
+    dataset = GraphDataset(root=args.data_root, ids=all_ids, no_edges=args.no_edges)
     all_labels = [dataset[i]['label'] for i in range(len(dataset))]
     
     # Set random seeds
@@ -72,10 +72,12 @@ def run_bayesian_optimization(args):
         os.makedirs(trial_dir, exist_ok=True)
         
         # Set up cross-validation
-        skf = StratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=args.seed)
+        folds = make_folds(dataset.ids, all_labels, args.n_folds,
+                           args.seed if args.split_seed is None else args.split_seed,
+                           args.group_by_patient)
         fold_results = {}
         
-        for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(dataset)), all_labels)):
+        for fold, (train_idx, val_idx) in enumerate(folds):
             print(f"\nTrial {trial.number}, Fold {fold+1}/{args.n_folds}")
             fold_dir = os.path.join(trial_dir, f"fold{fold+1}")
             os.makedirs(fold_dir, exist_ok=True)
@@ -204,10 +206,23 @@ def run_standard_training(args):
     # Load dataset
     with open(args.train_list, 'r') as f:
         all_ids = f.readlines()
-    
-    dataset = GraphDataset(root=args.data_root, ids=all_ids)
+
+    dataset = GraphDataset(root=args.data_root, ids=all_ids, no_edges=args.no_edges)
     all_labels = [dataset[i]['label'] for i in range(len(dataset))]
-    
+
+    # Optional fixed held-out test set (disjoint from --train-list, never
+    # used for model selection): built once and shared across every fold,
+    # same as --train-list's dataset above. Each fold evaluates its own
+    # selected checkpoint against this same set right after training --
+    # see train_edge_gnn/train_and_evaluate -- instead of a separate test
+    # script run manually afterward.
+    test_dataset = None
+    if args.test_list:
+        with open(args.test_list, 'r') as f:
+            test_ids = f.readlines()
+        test_dataset = GraphDataset(root=args.data_root, ids=test_ids, no_edges=args.no_edges)
+        print(f"Held-out test set: {len(test_dataset)} samples from {args.test_list}")
+
     # Handle parameter name conversion
     if hasattr(args, 'lambda_reg') and not hasattr(args, 'beta'):
         args.beta = args.lambda_reg
@@ -227,70 +242,105 @@ def run_standard_training(args):
             f.write(f"{arg}: {value}\n")
     
     # Set up cross-validation
-    skf = StratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=args.seed)
+    folds = make_folds(dataset.ids, all_labels, args.n_folds,
+                       args.seed if args.split_seed is None else args.split_seed,
+                       args.group_by_patient)
+    n_patients = len({patient_id(i.split()[0]) for i in dataset.ids})
+    print(f"CV split: {'patient-grouped' if args.group_by_patient else 'slide-level'} "
+          f"({len(dataset.ids)} slides, {n_patients} patients)")
     
     fold_results = {}
     
-    for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(dataset)), all_labels)):
+    for fold, (train_idx, val_idx) in enumerate(folds):
         print(f"\nFold {fold+1}/{args.n_folds}")
         fold_dir = os.path.join(args.output_dir, f"fold{fold+1}")
         os.makedirs(fold_dir, exist_ok=True)
-        
+
         # Train model for this fold
         fold_results[f"fold{fold+1}"] = train_edge_gnn(
             dataset=dataset,
             train_idx=train_idx,
             val_idx=val_idx,
             args=args,
-            output_dir=fold_dir
+            output_dir=fold_dir,
+            test_dataset=test_dataset,
         )
-    
+
+        # --max-folds stops early (e.g. for a hyperparameter sweep, where
+        # training all --n-folds per trial is too expensive) while still
+        # using the SAME StratifiedKFold split every trial would use for a
+        # full run -- fold 1 of a 1-fold run is fold 1 of a 5-fold run,
+        # not a different, ad-hoc train/val split.
+        if args.max_folds is not None and (fold + 1) >= args.max_folds:
+            print(f"\n--max-folds={args.max_folds} reached, stopping after fold {fold+1}.")
+            break
+
     summarize_cross_validation(fold_results, args)
 
 def summarize_cross_validation(fold_results, args):
-    """Summarize cross-validation results"""
-    # Summarize cross-validation results
-    val_accs = [fold_results[f"fold{fold+1}"]["results"]["best_val_acc"] 
-                for fold in range(args.n_folds)]
-    
+    """
+    Summarize cross-validation results.
+
+    Iterates over len(fold_results), NOT args.n_folds -- they can differ
+    (--max-folds stopping early for a sweep, or any future early-exit) and
+    indexing fold_results["fold{n_folds}"] when fewer folds actually ran
+    raised a bare KeyError with no useful message.
+    """
+    n_trained = len(fold_results)
+    val_accs = [fold_results[f"fold{fold+1}"]["results"]["best_val_acc"]
+                for fold in range(n_trained)]
+
+    # Present only when --test-list was given (see run_standard_training).
+    test_accs = [fold_results[f"fold{fold+1}"]["results"]["test_accuracy"]
+                 for fold in range(n_trained)
+                 if "test_accuracy" in fold_results[f"fold{fold+1}"]["results"]]
+
     edge_sparsities = []
-    for fold in range(args.n_folds):
+    for fold in range(n_trained):
         if "best_edge_sparsity" in fold_results[f"fold{fold+1}"]["results"]:
             edge_sparsities.append(fold_results[f"fold{fold+1}"]["results"]["best_edge_sparsity"])
     
     avg_acc = sum(val_accs) / len(val_accs)
     std_acc = np.std(val_accs)
-    
+
+    avg_test_acc = np.mean(test_accs) if test_accs else None
+    std_test_acc = np.std(test_accs) if test_accs else None
+
     if edge_sparsities:
         avg_sparsity = sum(edge_sparsities) / len(edge_sparsities)
         std_sparsity = np.std(edge_sparsities)
     else:
         avg_sparsity = None
         std_sparsity = None
-    
+
     # Get regularization parameter name
     reg_param_name = "Lambda" if hasattr(args, 'lambda_reg') else "Beta"
     reg_param_value = args.lambda_reg if hasattr(args, 'lambda_reg') else args.beta
-    
+
     # Get regularization mode name
     reg_mode_name = "Regularization Mode" if hasattr(args, 'reg_mode') else "EGL Mode"
     reg_mode_value = args.reg_mode if hasattr(args, 'reg_mode') else args.egl_mode
-    
-    write_cv_summary(args, fold_results, avg_acc, std_acc, avg_sparsity, std_sparsity, 
-                    reg_param_name, reg_param_value, reg_mode_name, reg_mode_value)
+
+    write_cv_summary(args, fold_results, avg_acc, std_acc, avg_sparsity, std_sparsity,
+                    reg_param_name, reg_param_value, reg_mode_name, reg_mode_value,
+                    avg_test_acc, std_test_acc)
     print_cv_summary(avg_acc, std_acc, avg_sparsity, std_sparsity, fold_results, args,
-                   reg_param_name, reg_param_value, reg_mode_name, reg_mode_value)
+                   reg_param_name, reg_param_value, reg_mode_name, reg_mode_value,
+                   avg_test_acc, std_test_acc)
 
 def write_cv_summary(args, fold_results, avg_acc, std_acc, avg_sparsity, std_sparsity,
-                    reg_param_name, reg_param_value, reg_mode_name, reg_mode_value):
+                    reg_param_name, reg_param_value, reg_mode_name, reg_mode_value,
+                    avg_test_acc=None, std_test_acc=None):
     """Write cross-validation summary to a file"""
     with open(os.path.join(args.output_dir, 'cv_summary.txt'), 'w') as f:
         f.write("CROSS-VALIDATION SUMMARY\n")
         f.write("=" * 40 + "\n\n")
-        
+
         f.write("IMPROVED EDGE GNN\n")
         f.write("-" * 20 + "\n")
         f.write(f"Average Validation Accuracy: {avg_acc:.4f} +/- {std_acc:.4f}\n")
+        if avg_test_acc is not None:
+            f.write(f"Average Test Accuracy: {avg_test_acc:.4f} +/- {std_test_acc:.4f}\n")
         if avg_sparsity is not None:
             f.write(f"Average Edge Sparsity: {avg_sparsity:.1f}% +/- {std_sparsity:.1f}%\n\n")
         
@@ -314,21 +364,26 @@ def write_cv_summary(args, fold_results, avg_acc, std_acc, avg_sparsity, std_spa
         
         f.write("\nFOLD RESULTS\n")
         f.write("-" * 20 + "\n")
-        for fold in range(args.n_folds):
+        for fold in range(len(fold_results)):
             results = fold_results[f"fold{fold+1}"]
             f.write(f"Fold {fold+1}: Acc={results['results']['best_val_acc']:.4f} (Epoch {results['results']['best_epoch']})")
+            if "test_accuracy" in results["results"]:
+                f.write(f", Test Acc={results['results']['test_accuracy']:.4f}")
             if "best_edge_sparsity" in results["results"]:
                 f.write(f", Sparsity={results['results']['best_edge_sparsity']:.1f}%\n")
             else:
                 f.write("\n")
 
 def print_cv_summary(avg_acc, std_acc, avg_sparsity, std_sparsity, fold_results, args,
-                    reg_param_name, reg_param_value, reg_mode_name, reg_mode_value):
+                    reg_param_name, reg_param_value, reg_mode_name, reg_mode_value,
+                    avg_test_acc=None, std_test_acc=None):
     """Print cross-validation summary and recommendations"""
     print("\n" + "="*60)
     print("CROSS-VALIDATION COMPLETE")
     print("="*60)
     print(f"ImprovedEdgeGNN: {avg_acc:.4f} +/- {std_acc:.4f}")
+    if avg_test_acc is not None:
+        print(f"Held-out Test Accuracy: {avg_test_acc:.4f} +/- {std_test_acc:.4f}")
     if avg_sparsity is not None:
         print(f"Average Edge Sparsity: {avg_sparsity:.1f}% +/- {std_sparsity:.1f}%")
     
@@ -369,7 +424,13 @@ def main():
     # Parse arguments
     parser = get_parser()
     args = parser.parse_args()
-    
+    validate_common_paths(args)
+    if args.no_edges:
+        # With an empty graph there is nothing to gate, so the L0/density terms
+        # are meaningless; train as a plain per-patch model.
+        args.reg_mode = args.egl_mode = 'none'
+        print("--no-edges: empty graphs, regularization disabled (reg-mode none)")
+
     # Check whether to run Bayesian optimization or standard training
     if args.run_bayesian_opt:
         # Run Bayesian optimization

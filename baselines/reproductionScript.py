@@ -17,7 +17,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-from dataset import GraphDataset
+from utils.dataset import GraphDataset
 
 # Import baseline models
 from baselines.GTP import GTP
@@ -25,6 +25,7 @@ from baselines.gcn import GCN
 from baselines.graphLsurv import GraphLSurv
 from baselines.patchGCN import PatchGCN, DeepGraphConv
 from baselines.FLOPcalcul import ComputationalProfiler
+from utils.config import add_common_args, validate_common_paths
 
 
 def collate_baseline(batch):
@@ -212,14 +213,21 @@ def measure_computational_complexity(models_dict, device='cuda', features_path=N
     return results
 
 
-def create_models():
-    """Create all baseline models."""
+def create_models(feature_dim=1024, num_classes=3):
+    """
+    Create all baseline models.
+
+    feature_dim/num_classes were hardcoded (1024/3) regardless of what
+    dataset was actually loaded -- any cohort with a different feature
+    extractor (e.g. UNI2-h's 1536-dim) or class count crashed on the first
+    layer. Now sourced from --n-features/--n-class (see main()).
+    """
     models = {
-        'GraphLSurv': GraphLSurv(input_dim=1024, hidden_dim=256, num_classes=3),
-        'GTP': GTP(input_dim=1024, hidden_dim=64, num_classes=3, pool_size=100),
-        'GCN': GCN(input_dim=1024, hidden_dim=256, num_classes=3),
-        'PatchGCN': PatchGCN(input_dim=1024, hidden_dim=128, num_classes=3),
-        'DeepGraphConv': DeepGraphConv(input_dim=1024, hidden_dim=256, num_classes=3)
+        'GraphLSurv': GraphLSurv(input_dim=feature_dim, hidden_dim=256, num_classes=num_classes),
+        'GTP': GTP(input_dim=feature_dim, hidden_dim=64, num_classes=num_classes, pool_size=100),
+        'GCN': GCN(input_dim=feature_dim, hidden_dim=256, num_classes=num_classes),
+        'PatchGCN': PatchGCN(input_dim=feature_dim, hidden_dim=128, num_classes=num_classes),
+        'DeepGraphConv': DeepGraphConv(input_dim=feature_dim, hidden_dim=256, num_classes=num_classes)
     }
     return models
 
@@ -258,64 +266,67 @@ def load_dataset(data_root, train_ids_file, val_ids_file, site='LUAD'):
 
 def main():
     parser = argparse.ArgumentParser(description='Reproduce baseline comparison results')
-    parser.add_argument('--model', choices=['graphlsurv', 'gtp', 'gcn', 'patchgcn', 'deepgraphconv', 'all'], 
+    parser.add_argument('--model', choices=['graphlsurv', 'gtp', 'gcn', 'patchgcn', 'deepgraphconv', 'all'],
                        default='all', help='Model to train/evaluate')
-    parser.add_argument('--data_root', type=str, required=True,
-                       help='Path to dataset root directory')
-    parser.add_argument('--train_ids', type=str, required=True,
-                       help='Path to train IDs file')
-    parser.add_argument('--val_ids', type=str, required=True,
-                       help='Path to validation IDs file')
+    # Shared data/IO flags (utils/config.py). Renamed from this script's old
+    # --train-ids/--val-ids to the --train-list/--test-list convention used
+    # everywhere else in the repo. n_features_default=1024 preserves this
+    # script's original hardcoded assumption; pass --n-features to override
+    # for a different feature extractor (e.g. 1536 for UNI2-h).
+    add_common_args(parser, n_features_default=1024, output_dir_default='./baseline_results',
+                     require_test_list=True)
+    parser.add_argument('--n-class', type=int, default=3, help='Number of classes')
     parser.add_argument('--site', type=str, default='LUAD',
                        help='Dataset site')
     parser.add_argument('--epochs', type=int, default=100,
                        help='Number of training epochs')
     parser.add_argument('--device', type=str, default='cuda',
                        help='Device to use')
-    parser.add_argument('--output_dir', type=str, default='./baseline_results',
-                       help='Output directory for results')
-    parser.add_argument('--compute_flops_only', action='store_true',
+    parser.add_argument('--compute-flops-only', action='store_true',
                        help='Only compute FLOPs without training')
-    parser.add_argument('--features_path', type=str, default=None,
+    parser.add_argument('--features-path', type=str, default=None,
                        help='Path to real features.pt file for FLOP measurement')
-    parser.add_argument('--adj_path', type=str, default=None,
+    parser.add_argument('--adj-path', type=str, default=None,
                        help='Path to real adj_s.pt file for FLOP measurement')
-    
+
     args = parser.parse_args()
-    
+
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     # Set device
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    
+
     # Create models
-    models = create_models()
-    
+    models = create_models(feature_dim=args.n_features, num_classes=args.n_class)
+
     if args.compute_flops_only:
-        # Only measure computational complexity
+        # Only measure computational complexity -- --data-root/--train-list/
+        # --test-list are unused on this path, so skip validating them.
         if args.features_path and args.adj_path:
             print(f"Using real WSI data:")
             print(f"  Features: {args.features_path}")
             print(f"  Adjacency: {args.adj_path}")
-        
+
         flop_results = measure_computational_complexity(
-            models, device, 
-            features_path=args.features_path, 
+            models, device,
+            features_path=args.features_path,
             adj_path=args.adj_path
         )
-        
+
         # Save results
         with open(os.path.join(args.output_dir, 'flop_results.json'), 'w') as f:
             json.dump(flop_results, f, indent=2)
-        
+
         print("\nFLOP measurement completed!")
         return
-    
+
+    validate_common_paths(args)
+
     # Load dataset
     train_loader, val_loader = load_dataset(
-        args.data_root, args.train_ids, args.val_ids, args.site
+        args.data_root, args.train_list, args.test_list, args.site
     )
     
     # Train models

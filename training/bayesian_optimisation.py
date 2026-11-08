@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import optuna
 from datetime import datetime
-from sklearn.model_selection import StratifiedKFold
+from utils.splits import make_folds
 
 from training.training import train_edge_gnn
 from utils.dataset import GraphDataset
@@ -44,10 +44,12 @@ def objective(trial, dataset, all_labels, args):
     os.makedirs(trial_dir, exist_ok=True)
     
     # Set up cross-validation
-    skf = StratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=args.seed)
+    folds = make_folds(dataset.ids, all_labels, args.n_folds,
+                       getattr(args, 'split_seed', None) or args.seed,
+                       getattr(args, 'group_by_patient', True))
     fold_results = {}
     
-    for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(dataset)), all_labels)):
+    for fold, (train_idx, val_idx) in enumerate(folds):
         fold_dir = os.path.join(trial_dir, f"fold{fold+1}")
         os.makedirs(fold_dir, exist_ok=True)
         
@@ -89,7 +91,7 @@ def run_bayesian_optimization(args):
     with open(args.train_list, 'r') as f:
         all_ids = f.readlines()
     
-    dataset = GraphDataset(root=args.data_root, ids=all_ids)
+    dataset = GraphDataset(root=args.data_root, ids=all_ids, no_edges=getattr(args, 'no_edges', False))
     all_labels = [dataset[i]['label'] for i in range(len(dataset))]
     
     # Create output directory with timestamp

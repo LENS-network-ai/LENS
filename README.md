@@ -17,8 +17,7 @@
 ##  Installation
 
 ```bash
-# Clone the repository
-git@github.com:LENS-network-ai/LENS.git
+# Clone the repository (URL withheld for double-blind review), then:
 cd LENS
 
 # Install dependencies
@@ -285,7 +284,7 @@ The testing script automatically detects all model configurations from the check
 
 ### Basic Usage
 ```bash
-python test_lens2.py \
+python testLens2.py \
   --model-path /path/to/best_model.pt \
   --test-data /path/to/test_list.txt \
   --data-root /path/to/data \
@@ -294,7 +293,7 @@ python test_lens2.py \
 
 ### Advanced Usage with All Options
 ```bash
-python test_lens2_auto.py \
+python testLens2.py \
   --model-path ./results/lens_hc/fold1/phase_models/overall_best_model.pth \
   --test-data ./data/TCGA-LUNG/test.txt \
   --data-root ./data/TCGA-LUNG/simclr_files \
@@ -377,6 +376,53 @@ The heatmap uses JET colormap where red indicates high edge connectivity (import
 
 <img src="https://github.com/user-attachments/assets/eee7e786-9605-4c5a-b032-c5abd81998db" width="400"/>
 
+
+## Cross-validation, ablations, baselines and diagnostics
+
+### Patient-grouped folds
+Folds keep every patient's slides together (`StratifiedGroupKFold` on the patient id: the first
+three segments of a TCGA barcode, the case id of a CPTAC slide such as `C3L-02660-25`).
+- `--no-group-by-patient` restores the legacy slide-level split (slides of one patient can land in
+  both train and validation).
+- `--split-seed N` fixes the folds while `--seed` varies the initialization (default: folds follow `--seed`).
+
+### No-edge ablation
+`--no-edges` trains and evaluates on empty graphs (it implies `--reg-mode none`). Each patch is seen
+on its own and the readout falls back to all real patches: mean pooling for the softmax readout
+(`--no-attention-pooling`), [CLS] attention over all patches for LENS+. In this ablation patches with
+no retained edge are **not** excluded, unlike in the gated models.
+
+### Pooling rule
+The softmax readout (`--no-attention-pooling`) is a softmax over retained edge mass
+`w_i = sum_j z_ij`; patches with `w_i = 0` are masked out before normalization and get weight exactly 0.
+For LENS+, the [CLS] token attends only to patches with `w_i > 0`. If a graph has no retained edge,
+the readout falls back to all real patches.
+
+### Per-graph logit normalization (experimental)
+`--edge-logit-norm` standardizes each graph's edge logits and puts the `--target-density` quantile at
+the gate's keep-probability midpoint, so about that fraction of every graph's edges is kept by
+construction. It is off by default and has not been validated against the reported results.
+
+### WiKG baseline
+```bash
+bash baselines/setup_wikg_baseline.sh            # clones the official code (pinned commit)
+python -m baselines.train_wikg --data-root /path/to/graphs --train-list /path/to/train_list.txt \
+    --test-list /path/to/test_list.txt --n-features 1536 --n-class 3 --output-dir results/wikg
+python -m baselines.eval_wikg --checkpoint results/wikg/run_x/fold1/phase_models/overall_best_model.pth \
+    --data-root /path/to/graphs --test-list /path/to/test_list.txt --output-dir results/wikg_eval
+```
+WiKG builds its own graph from the features and never reads the 8-NN adjacency. It uses the same
+folds, loop and prediction files as LENS.
+
+### Diagnostics
+- `python -m scripts.diagnose_edge_scorer`: logit spread, gate statistics and a contrast-block
+  ablation for a trained scorer.
+- `python -m scripts.seed_consistency`: for several seeds of the same fold, Spearman correlation of
+  per-patch retained edge mass, top-10% patch Jaccard, retained-edge Jaccard, correlation with node
+  degree, and precision/recall against expert RoI masks (LENS gates from checkpoints, CLAM from
+  per-patch score files). Prints one table. Run `python -m scripts.seed_consistency --help`.
+
+Figures used in the paper are in [`figures/`](figures/).
 
 ## 📊 Results
 

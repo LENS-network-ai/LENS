@@ -3,6 +3,7 @@ Training loop with WandB logging
 Enhanced with phase-specific model saving (warmup, ramp, plateau) and sparsity matrices
 """
 
+import csv
 import os
 import torch
 import gc
@@ -14,8 +15,19 @@ from model.L0_Reg import compute_density
 
 def train_and_evaluate(model, train_loader, val_loader, optimizer, scheduler, device,
                       num_epochs, n_features, output_dir, warmup_epochs=5,
-                      ramp_epochs=20, wandb_config=None, l0_method='hard-concrete'):
-    """Train and evaluate with phase-specific model saving"""
+                      ramp_epochs=20, wandb_config=None, l0_method='hard-concrete',
+                      test_loader=None):
+    """
+    Train and evaluate with phase-specific model saving.
+
+    test_loader: optional fixed held-out set. When given, once all epochs
+    finish the overall-best checkpoint (by validation accuracy, saved
+    below as models_dir/phase_models/overall_best_model.pth) is reloaded
+    and evaluated against it via validate_epoch_with_matrices -- the exact
+    same prediction/evaluation function validation already uses each
+    epoch, just called once more on held-out data -- rather than a
+    separately maintained test script/pipeline.
+    """
     
     # Initialize WandB
     use_wandb = wandb_config is not None
@@ -98,9 +110,13 @@ def train_and_evaluate(model, train_loader, val_loader, optimizer, scheduler, de
         
         torch.cuda.empty_cache()
         
-        # Validation phase
+        # Validation phase. save_predictions_path is overwritten every
+        # epoch (not accumulated) -- always the current, live prediction
+        # snapshot during training, same file format the held-out test
+        # pass below writes.
         val_metrics, edge_weights_sample = validate_epoch_with_matrices(
-            model, val_loader, evaluator, n_features, epoch
+            model, val_loader, evaluator, n_features, epoch,
+            save_predictions_path=os.path.join(output_dir, 'val_predictions_latest.csv')
         )
         
         val_accs.append(val_metrics['accuracy'])
@@ -109,7 +125,16 @@ def train_and_evaluate(model, train_loader, val_loader, optimizer, scheduler, de
         print(f"\n   Validation Accuracy: {val_metrics['accuracy']:.4f}, "
               f"Loss: {val_metrics['loss']:.4f}")
         print(f"   Current Density: {train_metrics.get('current_density', 0)*100:.1f}%")
-        
+
+        # Same compact per-epoch summary line as training/train_survival.py's
+        # "Fold N Epoch M/T | train loss=... c-index=... | val loss=... c-index=...
+        # | lambda_eff=... kept_edges=...%", one line to scan a whole run's log.
+        print(f"Epoch {epoch+1}/{num_epochs} | "
+              f"train loss={train_metrics['loss']:.4f} acc={train_metrics['accuracy']:.4f} | "
+              f"val loss={val_metrics['loss']:.4f} acc={val_metrics['accuracy']:.4f} | "
+              f"lambda_eff={train_metrics.get('lambda_eff', 0):.6f} "
+              f"kept_edges={train_metrics.get('current_density', 0)*100:.1f}%")
+
         # Phase-specific model saving
         val_acc = val_metrics['accuracy']
         current_density = train_metrics.get('current_density', 0)
@@ -183,17 +208,70 @@ def train_and_evaluate(model, train_loader, val_loader, optimizer, scheduler, de
     print(f"  Ramp:    Acc={best_ramp['acc']:.4f} at epoch {best_ramp['epoch']}, Density={best_ramp['density']*100:.1f}%")
     print(f"  Plateau: Acc={best_plateau['acc']:.4f} at epoch {best_plateau['epoch']}, Density={best_plateau['density']*100:.1f}%")
     print(f"{'='*70}\n")
-    
+
+    # Held-out test evaluation -- reload the overall-best checkpoint (by
+    # validation accuracy, saved above) before evaluating, since a
+    # checkpoint's `model_state_dict` alone doesn't capture model.temperature
+    # or the regularizer's schedule state (plain Python attributes, not
+    # registered buffers) -- without restoring them, gate values would be
+    # computed under whatever temperature the LAST training epoch left
+    # behind rather than the one the selected checkpoint's weights were
+    # actually trained under.
+    test_results = {}
+    if test_loader is not None:
+        best_ckpt_path = os.path.join(models_dir, 'overall_best_model.pth')
+        if os.path.exists(best_ckpt_path):
+            checkpoint = torch.load(best_ckpt_path, map_location=device, weights_only=False)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            if 'temperature' in checkpoint and hasattr(model, 'temperature'):
+                model.temperature = checkpoint['temperature']
+
+            # Same "restored" line as training/train_survival.py's run_fold,
+            # right before the checkpoint it names is actually evaluated.
+            print(f"Best val accuracy={best_overall['acc']:.4f} at epoch {best_overall['epoch']}/{num_epochs} "
+                  f"({best_overall['phase']} phase, temperature restored to "
+                  f"{model.temperature if hasattr(model, 'temperature') else float('nan'):.3f} for test evaluation)")
+
+            test_metrics, _ = validate_epoch_with_matrices(
+                model, test_loader, evaluator, n_features, epoch=best_overall['epoch'],
+                save_predictions_path=os.path.join(output_dir, 'test_predictions.csv')
+            )
+            test_results = {
+                'test_accuracy': test_metrics['accuracy'],
+                'test_loss': test_metrics['loss'],
+                'test_edge_sparsity': test_metrics.get('edge_sparsity', 0),
+            }
+
+            # Same pipe-delimited "DONE" summary as run_fold's
+            # "Fold N DONE | best val c-index=... | test c-index=... |
+            # final kept_edges=...%".
+            print(f"DONE | best val acc={best_overall['acc']:.4f} | "
+                  f"test acc={test_metrics['accuracy']:.4f} | "
+                  f"test loss={test_metrics['loss']:.4f} | "
+                  f"final kept_edges={density_history[-1]*100 if density_history else 0:.1f}%")
+            print(f"{'='*70}\n")
+
+            if use_wandb:
+                wandb.log({
+                    'test/accuracy': test_metrics['accuracy'],
+                    'test/loss': test_metrics['loss'],
+                    'test/edge_sparsity': test_metrics.get('edge_sparsity', 0),
+                })
+        else:
+            print(f"[WARNING] test_loader given but no checkpoint found at {best_ckpt_path} "
+                  f"-- skipping held-out test evaluation.")
+
     # Finish WandB
     if use_wandb:
         wandb.finish()
-    
+
     return {
         "train_accs": train_accs,
         "train_losses": train_losses,
         "val_accs": val_accs,
         "val_losses": val_losses,
         "density_history": density_history,
+        **test_results,
         "best_val_acc": best_overall['acc'],
         "best_epoch": best_overall['epoch'],
         "best_warmup": best_warmup,
@@ -232,10 +310,18 @@ def save_model_with_matrices(model, optimizer, epoch, val_acc, current_density,
         torch.save(edge_weights, matrix_path)
 
 
-def validate_epoch_with_matrices(model, val_loader, evaluator, n_features, epoch):
+def validate_epoch_with_matrices(model, val_loader, evaluator, n_features, epoch,
+                                  save_predictions_path=None):
     """
-    Validation with edge weight extraction
-    
+    Validation with edge weight extraction.
+
+    save_predictions_path: when given, writes a per-sample prediction table
+    (slide_id, true_label, predicted_label, confidence, correct) to this CSV
+    -- the same function/format used for both the per-epoch validation pass
+    during training and the held-out test pass (see train_and_evaluate),
+    so "what a prediction looks like" is identical in both places rather
+    than test needing separate reporting code.
+
     Returns:
         metrics: Validation metrics dict
         edge_weights_sample: Sample edge weights for saving
@@ -243,13 +329,14 @@ def validate_epoch_with_matrices(model, val_loader, evaluator, n_features, epoch
     model.eval()
     val_loss = 0.0
     evaluator.reset_metrics()
-    
+
     if hasattr(model, 'set_print_stats'):
         model.set_print_stats(False)
-    
+
     all_edge_weights = []
     edge_weights_sample = None
-    
+    prediction_rows = []
+
     with torch.no_grad():
         for idx, sample in enumerate(val_loader):
             try:
@@ -257,7 +344,21 @@ def validate_epoch_with_matrices(model, val_loader, evaluator, n_features, epoch
                     sample, model, n_features=n_features
                 )
                 val_loss += loss.item()
-                
+
+                if save_predictions_path is not None:
+                    probs = torch.softmax(pred.detach(), dim=1)
+                    confidences, predicted = probs.max(dim=1)
+                    for i, slide_id in enumerate(sample['id']):
+                        true_label = int(labels[i].item())
+                        predicted_label = int(predicted[i].item())
+                        prediction_rows.append({
+                            'slide_id': slide_id,
+                            'true_label': true_label,
+                            'predicted_label': predicted_label,
+                            'confidence': confidences[i].item(),
+                            'correct': int(true_label == predicted_label),
+                        })
+
                 # Get edge weights for first batch as sample
                 if idx == 0 and weighted_adj is not None:
                     node_feat, labels, adjs, masks = preparefeatureLabel(
@@ -298,7 +399,19 @@ def validate_epoch_with_matrices(model, val_loader, evaluator, n_features, epoch
         'loss': avg_val_loss,
         'edge_sparsity': edge_sparsity,
     }
-    
+
+    if save_predictions_path is not None and prediction_rows:
+        os.makedirs(os.path.dirname(save_predictions_path) or '.', exist_ok=True)
+        with open(save_predictions_path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=list(prediction_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(prediction_rows)
+
+        n_correct = sum(row['correct'] for row in prediction_rows)
+        n_total = len(prediction_rows)
+        print(f"   Predictions saved to {save_predictions_path}: "
+              f"{n_correct}/{n_total} correct ({100.0*n_correct/n_total:.1f}%)")
+
     return metrics, edge_weights_sample
 
 

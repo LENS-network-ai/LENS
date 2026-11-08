@@ -20,7 +20,8 @@ class EdgeScoringNetwork(nn.Module):
     """
     
     def __init__(self, feature_dim, edge_dim=32, dropout=0.2, 
-                 l0_params=None, l0_method='hard-concrete'):
+                 l0_params=None, l0_method='hard-concrete',
+                 logit_norm=False, target_density=0.30):
         """
         Args:
             feature_dim: Node feature dimension
@@ -28,6 +29,13 @@ class EdgeScoringNetwork(nn.Module):
             dropout: Dropout rate
             l0_params: L0RegularizerParams or ARML0RegularizerParams
             l0_method: 'hard-concrete', 'arm', or 'ste'
+            logit_norm: standardize each graph's edge logits (z-score, learned
+                scale) and place the target_density quantile at the gate's
+                keep-probability midpoint, so about target_density of the
+                edges of every graph sit above it by construction. Off by
+                default (the paper's scorer); Hard-Concrete only.
+            target_density: fraction of edges per graph above the midpoint
+                when logit_norm is on
         """
         super().__init__()
         
@@ -36,12 +44,20 @@ class EdgeScoringNetwork(nn.Module):
         self.dropout = dropout
         self.l0_params = l0_params
         self.l0_method = l0_method
+        self.logit_norm = logit_norm
+        self.target_density = target_density
+        if logit_norm:
+            # softplus(logit_scale) is the spread between kept and removed edges
+            self.logit_scale = nn.Parameter(torch.tensor(1.0))
         
-        # Feature attention layer
+        # Feature attention tower: 2d -> edge_dim -> d with a softmax over the d
+        # channels. A bottleneck of edge_dim (128 in the paper) rather than d
+        # keeps this tower at ~0.59M parameters for d=1536 (it was d-wide,
+        # ~7.1M, and dominated scorer compute: it runs once per candidate edge).
         self.feature_attention = nn.Sequential(
-            nn.Linear(feature_dim * 2, feature_dim),
+            nn.Linear(feature_dim * 2, edge_dim),
             nn.ReLU(),
-            nn.Linear(feature_dim, feature_dim),
+            nn.Linear(edge_dim, feature_dim),
             nn.Softmax(dim=1)
         )
         
@@ -53,7 +69,15 @@ class EdgeScoringNetwork(nn.Module):
             spectral_norm(nn.Linear(edge_dim, edge_dim)),
             nn.ReLU(),
             nn.Dropout(dropout),
-            spectral_norm(nn.Linear(edge_dim, 1))
+            # Deliberately NOT spectral-normalized. Spectral norm on every layer
+            # makes the whole scorer 1-Lipschitz in its input, so logits could
+            # differ between any two edges by at most ~||e_1 - e_2|| (about 1
+            # for unit-norm endpoint features) -- far less than the ~3.2 logit
+            # range a Hard-Concrete gate at tau=0.67 needs to go from exactly 0
+            # to exactly 1. Gates could then only move together (via the bias),
+            # never separate. The first two layers keep spectral norm; this
+            # output layer sets the logit scale.
+            nn.Linear(edge_dim, 1)
         )
         
         # Kaiming initialization
@@ -74,6 +98,36 @@ class EdgeScoringNetwork(nn.Module):
         
         print(f"[EdgeScoring] Initialized: method={l0_method}, feature_dim={feature_dim}, edge_dim={edge_dim}")
     
+    def _standardize_logits(self, logAlpha, batch_ids, src_nodes, tgt_nodes,
+                            batch_size, num_nodes, params):
+        """Per-graph z-score of the logits, shifted so the (1 - target_density)
+        quantile of each graph lands on the keep-probability midpoint
+        (pi = 0.5, logit params.const1). The quantile is per graph, so the
+        retained fraction does not depend on graph size or on a global bias.
+
+        The two directions of an edge are scored separately, so their logits are
+        averaged first: otherwise each direction keeps ~target_density
+        independently and the averaged gate is nonzero if EITHER is, i.e. up to
+        ~2x target_density of the undirected edges."""
+        dense = torch.zeros(batch_size, num_nodes, num_nodes, device=logAlpha.device)
+        has = torch.zeros_like(dense)
+        dense[batch_ids, src_nodes, tgt_nodes] = logAlpha
+        has[batch_ids, src_nodes, tgt_nodes] = 1.0
+        both = (has * has.transpose(-1, -2)).bool()
+        dense = torch.where(both, 0.5 * (dense + dense.transpose(-1, -2)), dense)
+        logAlpha = dense[batch_ids, src_nodes, tgt_nodes]
+        out = torch.empty_like(logAlpha)
+        scale = F.softplus(self.logit_scale)
+        for b in range(batch_size):
+            mask = batch_ids == b
+            if not mask.any():
+                continue
+            z = logAlpha[mask]
+            z = (z - z.mean()) / (z.std(unbiased=False) + 1e-6)
+            q = torch.quantile(z.detach(), 1.0 - self.target_density)
+            out[mask] = params.const1 + scale * (z - q)
+        return out
+
     def compute_edge_weights(
         self, node_feat, adj_matrix,
         current_epoch=0, warmup_epochs=5, temperature=None,
@@ -89,7 +143,7 @@ class EdgeScoringNetwork(nn.Module):
             adj_matrix: Dense adjacency matrix [B, N, N]
             current_epoch: Current training epoch
             warmup_epochs: Number of warmup epochs
-            temperature: Temperature for Gumbel-Softmax
+            temperature: Hard-Concrete temperature tau
             graph_size_adaptation: Adapt to graph size
             min_edges_per_node: Minimum edges per node
             regularizer: L0Regularization instance
@@ -139,13 +193,21 @@ class EdgeScoringNetwork(nn.Module):
         # Apply feature attention
         edge_feats_raw = torch.cat([src_feat, tgt_feat], dim=1)
         attention_weights = self.feature_attention(edge_feats_raw)
-        attended_diff = feat_diff * attention_weights
+        # attention_weights sums to 1 over feature_dim channels, so a uniform
+        # attention is 1/feature_dim per channel and would shrink the contrast
+        # block ~feature_dim-fold relative to the unit-norm endpoint blocks.
+        # Scaling by feature_dim gives mean weight 1 (uniform attention ->
+        # plain |x_i - x_j|), so the contrast block keeps a usable magnitude.
+        attended_diff = feat_diff * attention_weights * self.feature_dim
         
         # Final edge features: [src || tgt || attended_diff]
         edge_features = torch.cat([src_feat, tgt_feat, attended_diff], dim=-1)
         
         # Compute edge logits
         logAlpha = self.edge_mlp(edge_features).squeeze(-1)
+        if self.logit_norm and params is not None and self.l0_method == 'hard-concrete':
+            logAlpha = self._standardize_logits(logAlpha, batch_ids, src_nodes, tgt_nodes,
+                                                batch_size, num_nodes, params)
         self.last_logAlpha = logAlpha
         
         # Store logits in regularizer
@@ -172,11 +234,6 @@ class EdgeScoringNetwork(nn.Module):
                     edge_weights = (probs > 0.5).float()
             else:
                 raise ValueError(f"Unknown l0_method: {self.l0_method}")
-
-            if print_stats:
-                active_edges = (edge_weights > 0.5).float().sum().item()
-                print(f"   [EdgeScoring-{self.l0_method.upper()}] Active edges: {active_edges}/{edge_features.size(0)} "
-                      f"({100*active_edges/max(edge_features.size(0),1):.1f}%)")
         else:
             # No L0 gating requested (e.g. reg_mode='none'): keep every
             # existing edge with a full weight of 1 (no sparsification).
@@ -185,8 +242,50 @@ class EdgeScoringNetwork(nn.Module):
         # Scatter edge weights and logits back to dense [B, N, N]
         edge_weights_dense = torch.zeros((batch_size, num_nodes, num_nodes), device=device)
         logAlpha_dense = torch.zeros((batch_size, num_nodes, num_nodes), device=device)
-        
+
         edge_weights_dense[batch_ids, src_nodes, tgt_nodes] = edge_weights
         logAlpha_dense[batch_ids, src_nodes, tgt_nodes] = logAlpha
-        
+
+        # Symmetrize for undirected graphs. edge_mlp's Linear layers are NOT
+        # invariant to swapping [src_feat, tgt_feat]'s concatenation order --
+        # the (i,j) and (j,i) rows in edge_index get different edge_features
+        # (attention_weights/attended_diff differ by direction too), so
+        # logAlpha_ij != logAlpha_ji in general, computed as two independent
+        # values. Left unfixed, this means node i's and node j's own
+        # aggregate() calls use genuinely different weights for the same
+        # physical edge during training (aggregate() reads row i / row j of
+        # edge_weights separately) -- a real asymmetry for graphs that are
+        # undirected by construction (spatial adjacency has no directionality
+        # to justify an edge "existing" from i's side but not j's, unlike
+        # e.g. GAT's deliberately asymmetric attention weights on an
+        # otherwise-fixed graph). Previously only the frozen inference-time
+        # gate was explicitly symmetrized (z_ij averaged with z_ji), leaving
+        # a train/inference discrepancy. Average both directions here, before
+        # anything downstream (GNN aggregation, L0 penalty, density control)
+        # consumes them, so training and inference operate on the same
+        # symmetric quantity throughout. Masked to positions where both
+        # directions are real edges, so this is a no-op wherever a graph
+        # only has one direction -- shouldn't happen with this repo's own
+        # adjacency construction (symmetric by construction in both
+        # preprocessing/graph_construction.py and
+        # preprocessing/build_survival_graphs.py), but kept safe rather than
+        # assumed.
+        edge_mask = (adj_matrix > 0).float()
+        bidirectional_mask = (edge_mask * edge_mask.transpose(-1, -2)).bool()
+
+        edge_weights_sym = 0.5 * (edge_weights_dense + edge_weights_dense.transpose(-1, -2))
+        edge_weights_dense = torch.where(bidirectional_mask, edge_weights_sym, edge_weights_dense)
+
+        logAlpha_sym = 0.5 * (logAlpha_dense + logAlpha_dense.transpose(-1, -2))
+        logAlpha_dense = torch.where(bidirectional_mask, logAlpha_sym, logAlpha_dense)
+
+        if use_l0 and params is not None and print_stats:
+            # Moved here (post-symmetrization) so this reports what's
+            # actually used downstream, not the pre-symmetrization values.
+            real_mask = edge_mask.bool()
+            n_real = real_mask.sum().item()
+            active_edges = (edge_weights_dense[real_mask] > 0.5).float().sum().item()
+            print(f"   [EdgeScoring-{self.l0_method.upper()}] Active edges: {active_edges}/{n_real} "
+                  f"({100*active_edges/max(n_real,1):.1f}%)")
+
         return edge_weights_dense, logAlpha_dense

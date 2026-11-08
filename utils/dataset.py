@@ -21,7 +21,8 @@ class GraphDataset(data.Dataset):
                  site: Optional[str] = 'LUAD',
                  classdict: Optional[Dict[str, int]] = None,
                  target_patch_size: Optional[int] = None,
-                 use_refined_adj: bool = False
+                 use_refined_adj: bool = False,
+                 no_edges: bool = False
                  ) -> None:
         """
         Create a GraphDataset
@@ -33,11 +34,19 @@ class GraphDataset(data.Dataset):
             classdict: Dictionary mapping class names to indices
             target_patch_size: Size of patches to extract (not used)
             use_refined_adj: Whether to use refined adjacency matrices
+            no_edges: Replace every adjacency with an empty graph (no-edge ablation:
+                the model sees each patch on its own, readout falls back to all patches)
         """
         super(GraphDataset, self).__init__()
+        # Fail here, not deep inside __getitem__ on whichever sample happens
+        # to be requested first (often mid-epoch, with a confusing traceback
+        # far from the actual --data-root typo).
+        if not os.path.isdir(root):
+            raise FileNotFoundError(f"GraphDataset root does not exist or is not a directory: {root}")
         self.root = root
         self.ids = ids
         self.use_refined_adj = use_refined_adj
+        self.no_edges = no_edges
 
         if classdict is not None:
             self.classdict = classdict
@@ -114,6 +123,8 @@ class GraphDataset(data.Dataset):
             # Ensure dense tensor
             if adj_s.is_sparse:
                 adj_s = adj_s.to_dense()
+            if self.no_edges:
+                adj_s = torch.zeros_like(adj_s)
 
             sample['image'] = features
             sample['adj_s'] = adj_s

@@ -38,9 +38,11 @@ class EdgeWeightedAttentionPooling:
             edge_mask = (adj_matrix[b] > 0).float()
             node_importance = torch.sum(edge_weights[b, :, valid_indices] * edge_mask[:, valid_indices], dim=0)
             
-            # Apply softmax attention
+            # Softmax over ACTIVE nodes only (retained edge mass > 0); patches
+            # with no retained edge get exactly zero weight, not exp(0).
             if torch.sum(node_importance) > 0:
-                attention_weights = F.softmax(node_importance, dim=0)
+                scores = node_importance.masked_fill(node_importance <= 0, float('-inf'))
+                attention_weights = F.softmax(scores, dim=0)
                 weighted_features = node_feat[b, valid_indices] * attention_weights.unsqueeze(1)
                 graph_rep[b] = torch.sum(weighted_features, dim=0)
             else:

@@ -84,11 +84,13 @@ class GNNLayerWithResidual(nn.Module):
         batch_size, num_nodes = adj_matrix.shape[:2]
         
         eye = torch.eye(num_nodes, device=device).unsqueeze(0).expand(batch_size, -1, -1)
-        adj_with_self = adj_matrix + eye
-        adj_with_self = torch.clamp(adj_with_self, max=1.0)
-        
-        # Apply learned edge weights
-        weighted_adj = adj_with_self * edge_weights
+        # Self-loop weight is a fixed 1, added AFTER gating: A_hat =
+        # row_norm(A * Z + I). Gating the self-loop too (the previous
+        # (A + I) * Z) multiplied it by the gate matrix's zero diagonal, so
+        # the self term vanished and row normalization then made the output
+        # independent of the gates' overall scale -- shrinking every gate to
+        # the density target cost nothing, so nothing pushed gates apart.
+        weighted_adj = adj_matrix * edge_weights + eye
         
         # Row-normalize for stable aggregation
         row_sum = torch.sum(weighted_adj, dim=2, keepdim=True) + 1e-8

@@ -11,7 +11,7 @@ Features:
 - Publication-quality visualizations
 
 Usage:
-    python test_lens2_auto.py \
+    python testLens2.py \
         --model-path best_model.pt \
         --test-data test.txt \
         --data-root /path/to/data \

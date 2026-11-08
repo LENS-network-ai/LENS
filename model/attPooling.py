@@ -122,11 +122,19 @@ class MultiHeadAttentionPooling(nn.Module):
         # CLS can attend to itself
         attn_mask[:, 0, 0] = 1.0
         
-        # CLS attends to valid nodes
-        if masks is not None:
-            attn_mask[:, 0, 1:] = masks  # [B, N]
-        else:
-            attn_mask[:, 0, 1:] = 1.0  # Attend to all nodes
+        # CLS attends only to ACTIVE nodes: real (non-padding) patches with
+        # retained edge mass w_i = sum_j z_ij > 0. Edge gates are symmetric, so
+        # a patch with w_i = 0 is also unreachable by every neighbour's
+        # message passing and patch-patch attention, which makes "a patch with
+        # no retained edge cannot influence the prediction" exactly true.
+        # Graphs with no active node at all (every gate zero) fall back to all
+        # real patches rather than leaving the [CLS] token with nothing to
+        # attend to.
+        valid = masks if masks is not None else torch.ones(batch_size, num_nodes, device=device)
+        active = (edge_weights.sum(dim=2) > 0).float()
+        cls_keys = valid * active
+        no_active = (cls_keys.sum(dim=1, keepdim=True) == 0).float()
+        attn_mask[:, 0, 1:] = cls_keys + no_active * valid
         
         # Part 2: Node attention (remaining rows)
         # Nodes attend to CLS token (first column)

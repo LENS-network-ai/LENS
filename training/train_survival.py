@@ -50,6 +50,7 @@ from model.LENS_survival import ImprovedEdgeGNNSurvival
 from utils.survival_dataset import SurvivalGraphDataset, collate_survival, prepare_survival_batch
 from utils.lr_scheduler import LR_Scheduler
 from utils.metrics import concordance_index
+from utils.config import add_common_args, validate_common_paths
 
 
 def read_ids(path):
@@ -430,17 +431,17 @@ def run_fold(fold, fold_train_ids, fold_val_ids, test_loader, args, device, outp
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--data-root', required=True)
-    parser.add_argument('--train-list', required=True)
-    parser.add_argument('--test-list', required=True)
-    parser.add_argument('--output-dir', required=True)
+    # Shared data/IO flags (utils/config.py) -- --test-list is required here
+    # (unlike main.py's optional one) since this pipeline's whole protocol
+    # depends on a fixed held-out set from the start. n_features_default
+    # matches this pipeline's 2048-dim WSI features, not SimCLR's 512.
+    add_common_args(parser, n_features_default=2048,
+                     require_test_list=True, require_output_dir=True)
 
     parser.add_argument('--n-folds', type=int, default=5)
-    parser.add_argument('--n-features', type=int, default=2048)
     parser.add_argument('--hidden-dim', type=int, default=256)
     parser.add_argument('--n-bins', type=int, default=4)
     parser.add_argument('--epochs', type=int, default=60)
-    parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--lr', type=float, default=2e-4)
     parser.add_argument('--weight-decay', type=float, default=1e-5)
     # Matches the classification pipeline's validated schedule (README's
@@ -473,8 +474,8 @@ def main():
     parser.add_argument('--wandb-project', default='lens-survival')
     parser.add_argument('--wandb-entity', default=None, help='WandB team/entity (default: your default entity)')
 
-    parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
+    validate_common_paths(args)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)

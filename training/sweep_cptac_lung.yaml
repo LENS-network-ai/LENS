@@ -1,0 +1,90 @@
+# WandB sweep: classification on CPTAC lung (LUAD/LSCC/normal), searching
+# lambda-reg / warmup-epochs / ramp-epochs with everything else fixed.
+#
+# --max-folds 1 (main.py, utils/config.py) trains only the first fold of the
+# same --n-folds StratifiedKFold split a full run would use, instead of all 5
+# -- cheap per-trial cost for the sweep, same fold-1 boundary a full run
+# would land on, so the winning config transfers directly to a real
+# --n-folds 5 run afterward.
+#
+# Objective: maximize best/overall_accuracy (the running-best val accuracy
+# across the run, already logged every epoch by training/training_loop.py's
+# existing wandb.log(...) call) -- no new tracking code needed, since
+# --max-folds 1 means each trial is exactly one fold with its own dedicated
+# wandb run (train_edge_gnn's internal wandb.init/finish), unlike the
+# survival sweep's shared-run-across-folds setup which needed a custom
+# cross-fold aggregate metric.
+#
+# Usage:
+#   cd ~/LENS
+#   wandb sweep training/sweep_cptac_lung.yaml     # prints a sweep ID
+#   wandb agent --count 20 <entity>/<project>/<sweep_id>
+
+program: main.py
+# Must match train_edge_gnn's hardcoded wandb_project default
+# (training/training.py) -- it's not exposed as a CLI flag on main.py, so
+# this has to be set here rather than passed in `command` below, to
+# guarantee each trial's own wandb.init() call lands in the same project
+# the sweep controller is watching.
+project: lens-training
+method: bayes
+metric:
+  # training/training_loop.py logs val/accuracy every epoch (last-epoch
+  # snapshot) AND best/overall_accuracy (running best across the run, the
+  # same quantity the CV summary's best_val_acc reports) -- use the latter
+  # so a trial isn't rewarded for a lucky final epoch versus one whose best
+  # epoch came earlier and got overtaken by overfitting by the end.
+  name: best/overall_accuracy
+  goal: maximize
+
+parameters:
+  lambda-reg:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 1.0
+  warmup-epochs:
+    distribution: int_uniform
+    min: 5
+    max: 30
+  ramp-epochs:
+    distribution: int_uniform
+    min: 10
+    max: 40
+
+# Fixed (non-swept) args, hardcoded directly in the command. Matches the
+# CPTAC-LUAD command established earlier in this project, with --max-folds 1
+# added for sweep cost and --hidden-dim/--num-attention-heads left at their
+# defaults (256 / 8) since "rest fixed" means fixed, not re-tuned here too.
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - "--data-root"
+  - "/path/to/graphs"
+  - "--train-list"
+  - "/path/to/train_list.txt"
+  - "--n-features"
+  - "512"
+  - "--n-class"
+  - "3"
+  - "--batch-size"
+  - "1"
+  - "--epochs"
+  - "80"
+  - "--n-folds"
+  - "5"
+  - "--max-folds"
+  - "1"
+  - "--reg-mode"
+  - "l0"
+  - "--l0-method"
+  - "hard-concrete"
+  - "--target-density"
+  - "0.30"
+  - "--lambda-density"
+  - "0.03"
+  - "--min-edges-per-node"
+  - "2"
+  - "--output-dir"
+  - "results/cptac_lung_sweep"
+  - ${args}
