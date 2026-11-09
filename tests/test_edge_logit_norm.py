@@ -69,3 +69,40 @@ def test_no_edges_dataset_returns_empty_adjacency(tmp_path):
     assert without['adj_s'].sum() == 0
     assert without['adj_s'].shape == with_edges.shape
     assert without['image'].shape == (5, 16)
+
+
+def test_labels_match_getitem_without_loading_slides(tmp_path):
+    ids = ['a\tnormal\n', 'b\tluad\n', 'c\tlscc\n']
+    # No slide folders exist: labels() must not touch the disk beyond the root.
+    ds = GraphDataset(str(tmp_path), ids)
+    assert ds.labels() == [0, 1, 2]
+
+
+def test_orientation_gates_are_averaged_in_training_and_inference():
+    # Each undirected edge is scored in both orientations; the gate the GNN sees
+    # is their average, in training (stochastic gates) as well as at inference.
+    for training in (True, False):
+        scorer = _scorer(False)
+        scorer.train(training)
+        feats = torch.nn.functional.normalize(torch.randn(1, 30, 16), dim=2)
+        adj = _ring_graph(30)
+        with torch.no_grad():
+            weights, log_alpha = scorer.compute_edge_weights(
+                feats, adj, use_l0=True, training=training, temperature=1.0)
+        assert torch.allclose(weights[0], weights[0].transpose(0, 1)), training
+        assert torch.allclose(log_alpha[0], log_alpha[0].transpose(0, 1)), training
+
+
+def test_inference_gate_is_a_function_of_one_logit_per_undirected_edge():
+    # Logits are averaged before gating, so at inference the gate equals the
+    # deterministic gate of that single logit -- not an average of two gates.
+    from model.L0Utils import l0_test
+    scorer = _scorer(False)
+    feats = torch.nn.functional.normalize(torch.randn(1, 40, 16), dim=2)
+    adj = _ring_graph(40)
+    with torch.no_grad():
+        weights, log_alpha = scorer.compute_edge_weights(
+            feats, adj, use_l0=True, training=False, temperature=0.67)
+    real = adj[0] > 0
+    expected = l0_test(log_alpha[0][real], params=scorer.l0_params, temperature=0.67)
+    assert torch.allclose(weights[0][real], expected, atol=1e-6)

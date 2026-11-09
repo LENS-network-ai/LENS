@@ -50,17 +50,21 @@ def train_edge_gnn(dataset, train_idx, val_idx, args, output_dir,
     train_subset = torch.utils.data.Subset(dataset, train_idx)
     val_subset = torch.utils.data.Subset(dataset, val_idx)
     
+    num_workers = getattr(args, 'num_workers', 0)
+    loader_kwargs = dict(num_workers=num_workers, persistent_workers=num_workers > 0)
     train_loader = DataLoader(
         train_subset, 
         batch_size=args.batch_size, 
         shuffle=True, 
-        collate_fn=collate
+        collate_fn=collate,
+        **loader_kwargs
     )
     val_loader = DataLoader(
         val_subset,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=collate
+        collate_fn=collate,
+        **loader_kwargs
     )
 
     test_loader = None

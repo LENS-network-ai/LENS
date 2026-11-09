@@ -42,6 +42,9 @@ def add_common_args(parser, n_features_default=512, batch_size_default=1,
     parser.add_argument('--output-dir', type=str, default=output_dir_default, required=require_output_dir,
                          help='Output directory')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--num-workers', type=int, default=0,
+                         help='DataLoader worker processes for the train/val loaders (default 0: '
+                              'slides are read in the main process). Overlaps disk reads with GPU work.')
     parser.add_argument('--split-seed', type=int, default=None,
                          help='Seed for the cross-validation split only (default: --seed). '
                               'Set it to a fixed value to keep the folds identical while '

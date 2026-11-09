@@ -41,7 +41,7 @@ def run_bayesian_optimization(args):
         all_ids = f.readlines()
     
     dataset = GraphDataset(root=args.data_root, ids=all_ids, no_edges=args.no_edges)
-    all_labels = [dataset[i]['label'] for i in range(len(dataset))]
+    all_labels = dataset.labels()
     
     # Set random seeds
     torch.manual_seed(args.seed)
@@ -208,7 +208,7 @@ def run_standard_training(args):
         all_ids = f.readlines()
 
     dataset = GraphDataset(root=args.data_root, ids=all_ids, no_edges=args.no_edges)
-    all_labels = [dataset[i]['label'] for i in range(len(dataset))]
+    all_labels = dataset.labels()
 
     # Optional fixed held-out test set (disjoint from --train-list, never
     # used for model selection): built once and shared across every fold,

@@ -135,5 +135,16 @@ class GraphDataset(data.Dataset):
             print(f"Error processing {info}: {str(e)}")
             raise
 
+    def labels(self) -> List[int]:
+        """Labels parsed from the id lines, without loading any slide (same
+        parsing and order as __getitem__)."""
+        out = []
+        for line in self.ids:
+            info = line.replace('\n', '')
+            parts = info.split('\t') if '\t' in info else info.split()
+            label = parts[1].strip().lower()
+            out.append(self.classdict[label] if self.classdict is not None else int(label))
+        return out
+
     def __len__(self):
         return len(self.ids)

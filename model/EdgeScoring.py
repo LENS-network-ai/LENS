@@ -98,24 +98,28 @@ class EdgeScoringNetwork(nn.Module):
         
         print(f"[EdgeScoring] Initialized: method={l0_method}, feature_dim={feature_dim}, edge_dim={edge_dim}")
     
-    def _standardize_logits(self, logAlpha, batch_ids, src_nodes, tgt_nodes,
-                            batch_size, num_nodes, params):
-        """Per-graph z-score of the logits, shifted so the (1 - target_density)
-        quantile of each graph lands on the keep-probability midpoint
-        (pi = 0.5, logit params.const1). The quantile is per graph, so the
-        retained fraction does not depend on graph size or on a global bias.
-
-        The two directions of an edge are scored separately, so their logits are
-        averaged first: otherwise each direction keeps ~target_density
-        independently and the averaged gate is nonzero if EITHER is, i.e. up to
-        ~2x target_density of the undirected edges."""
+    def _symmetrize_logits(self, logAlpha, batch_ids, src_nodes, tgt_nodes,
+                           batch_size, num_nodes):
+        """Average the logits of the two orientations of every undirected edge,
+        so each undirected edge has ONE logit. Applied before gating: the gate,
+        the keep probability pi and the penalty/density terms then all describe
+        the same quantity, and at inference both orientations get the same
+        deterministic gate (averaging gates after gating would keep an edge
+        whenever either orientation's gate is nonzero). Edges present in only
+        one direction keep their own logit."""
         dense = torch.zeros(batch_size, num_nodes, num_nodes, device=logAlpha.device)
         has = torch.zeros_like(dense)
         dense[batch_ids, src_nodes, tgt_nodes] = logAlpha
         has[batch_ids, src_nodes, tgt_nodes] = 1.0
         both = (has * has.transpose(-1, -2)).bool()
         dense = torch.where(both, 0.5 * (dense + dense.transpose(-1, -2)), dense)
-        logAlpha = dense[batch_ids, src_nodes, tgt_nodes]
+        return dense[batch_ids, src_nodes, tgt_nodes]
+
+    def _standardize_logits(self, logAlpha, batch_ids, batch_size, params):
+        """Per-graph z-score of the (already symmetrized) logits, shifted so the
+        (1 - target_density) quantile of each graph lands on the keep-probability
+        midpoint (pi = 0.5, logit params.const1). The quantile is per graph, so the
+        retained fraction does not depend on graph size or on a global bias."""
         out = torch.empty_like(logAlpha)
         scale = F.softplus(self.logit_scale)
         for b in range(batch_size):
@@ -205,9 +209,10 @@ class EdgeScoringNetwork(nn.Module):
         
         # Compute edge logits
         logAlpha = self.edge_mlp(edge_features).squeeze(-1)
+        logAlpha = self._symmetrize_logits(logAlpha, batch_ids, src_nodes, tgt_nodes,
+                                           batch_size, num_nodes)
         if self.logit_norm and params is not None and self.l0_method == 'hard-concrete':
-            logAlpha = self._standardize_logits(logAlpha, batch_ids, src_nodes, tgt_nodes,
-                                                batch_size, num_nodes, params)
+            logAlpha = self._standardize_logits(logAlpha, batch_ids, batch_size, params)
         self.last_logAlpha = logAlpha
         
         # Store logits in regularizer

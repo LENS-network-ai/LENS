@@ -92,7 +92,7 @@ def run_bayesian_optimization(args):
         all_ids = f.readlines()
     
     dataset = GraphDataset(root=args.data_root, ids=all_ids, no_edges=getattr(args, 'no_edges', False))
-    all_labels = [dataset[i]['label'] for i in range(len(dataset))]
+    all_labels = dataset.labels()
     
     # Create output directory with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

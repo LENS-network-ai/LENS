@@ -228,8 +228,10 @@ def lens_slide_summary(model, features, adj, device, edge_thresh):
     """Deterministic inference gates for one slide -> per-patch / per-edge summaries."""
     import torch
 
-    feats = features.unsqueeze(0).to(device)
-    adjs = adj.unsqueeze(0).to(device)
+    # Some feature files are float64; training copies them into float32 tensors
+    # (helper.preparefeatureLabel), so cast the same way here.
+    feats = features.float().unsqueeze(0).to(device)
+    adjs = adj.float().unsqueeze(0).to(device)
     masks = torch.ones(1, feats.shape[1], device=device)
     labels = torch.zeros(1, dtype=torch.long, device=device)  # only feeds the loss
     with torch.no_grad():
